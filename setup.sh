@@ -41,6 +41,14 @@ prompt_required() {
   done
 }
 
+prompt_optional() {
+  local var_name="$1"
+  local prompt_text="$2"
+  local value
+  read -rp "$(echo -e ${CYAN}"${prompt_text}: "${NC})" value
+  eval "$var_name='$value'"
+}
+
 prompt_file() {
   local var_name="$1"
   local prompt_text="$2"
@@ -192,6 +200,7 @@ API_HASH=${API_HASH}
 PHONE=${PHONE}
 SESSION=
 ALLOWED_USERS=${ALLOWED_USERS}
+ALLOWED_CHATS=
 DOMAIN=${DOMAIN}
 FILES_SUBDOMAIN=${FILES_SUBDOMAIN}
 PORT=${PORT}
@@ -259,8 +268,29 @@ echo ""
 cd "$INSTALL_DIR"
 node src/login.js
 
-# login.js exits 0 on success, which means SESSION is now in .env
-# Now start PM2
+# ------------------------------
+# Allowed Chats (after login)
+# ------------------------------
+
+echo ""
+echo -e "${BOLD}── Allowed Chats (Optional) ───────────────────────${NC}"
+echo -e "  ${YELLOW}You can limit the bot to only accept files from specific chats.${NC}"
+echo -e "  ${YELLOW}To find a Chat ID: go to your channel/group and send /chatid${NC}"
+echo -e "  ${YELLOW}Leave empty to allow files from ALL chats (not recommended).${NC}"
+echo ""
+prompt_optional ALLOWED_CHATS "Allowed Chat IDs (comma-separated, or press Enter to skip)"
+
+if [[ -n "$ALLOWED_CHATS" ]]; then
+  sed -i "s/^ALLOWED_CHATS=.*/ALLOWED_CHATS=${ALLOWED_CHATS}/" "$INSTALL_DIR/.env"
+  echo -e "  ${GREEN}✓ ALLOWED_CHATS saved.${NC}"
+else
+  echo -e "  ${YELLOW}  Skipped. You can add it later in .env and restart PM2.${NC}"
+fi
+
+# ------------------------------
+# Start PM2
+# ------------------------------
+
 echo -e "\n${GREEN}${BOLD}Starting application with PM2...${NC}"
 pm2 delete tg-filehost 2>/dev/null || true
 pm2 start ecosystem.config.js
@@ -284,3 +314,10 @@ echo -e "  pm2 status"
 echo -e "  pm2 logs tg-filehost"
 echo -e "  pm2 restart tg-filehost"
 echo ""
+if [[ -z "$ALLOWED_CHATS" ]]; then
+  echo -e "  ${YELLOW}⚠ Tip: To restrict to a specific chat:${NC}"
+  echo -e "  ${YELLOW}  1. Send /chatid in your desired channel/group${NC}"
+  echo -e "  ${YELLOW}  2. Add the ID to ALLOWED_CHATS in /var/www/tg-filehost/.env${NC}"
+  echo -e "  ${YELLOW}  3. Run: pm2 restart tg-filehost${NC}"
+  echo ""
+fi
