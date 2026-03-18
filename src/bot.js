@@ -26,27 +26,19 @@ function isAllowed(senderId, chatId) {
   return senderIdStr ? ALLOWED_USERS.includes(senderIdStr) : false;
 }
 
-/**
- * Send a reply. In channels, msg.reply() uses editMessage internally which
- * can fail with MESSAGE_NOT_MODIFIED. We use client.sendMessage directly.
- */
 async function sendReply(msg, text) {
   return await client.sendMessage(msg.chatId, {
     message: text,
     replyTo: msg.id,
+    linkPreview: false,
   });
 }
 
-/**
- * Edit a previously sent message safely.
- * Falls back to sending a new message if edit fails.
- */
 async function editOrSend(chatId, sentMsg, text) {
   try {
-    await client.editMessage(chatId, { message: sentMsg, text });
+    await client.editMessage(chatId, { message: sentMsg, text, linkPreview: false });
   } catch (e) {
-    // MESSAGE_NOT_MODIFIED or edit not allowed in channel
-    await client.sendMessage(chatId, { message: text });
+    await client.sendMessage(chatId, { message: text, linkPreview: false });
   }
 }
 
@@ -102,7 +94,7 @@ async function handleMessage(event) {
     if (files.length === 0) { await sendReply(msg, '\u{1F4C2} No files found.'); return; }
     const lines = files.map((f, i) => {
       const date = new Date(f.uploadedAt).toLocaleString('en-GB');
-      return `${i + 1}. **${f.originalName}**\n   \u{1F4BE} ${formatSize(f.size)} | \u{1F4C5} ${date}\n   \u{1F517} ${f.url}\n   \u{1F5D1} /del_${f.id.split('-')[0]}`;
+      return `${i + 1}. **${f.originalName}**\n   \u{1F4BE} ${formatSize(f.size)} | \u{1F4C5} ${date}\n   \u{1F517} \`${f.url}\`\n   \u{1F5D1} /del_${f.id.split('-')[0]}`;
     });
     for (const chunk of chunkArray(lines, 10)) {
       await sendReply(msg, chunk.join('\n\n'));
@@ -144,10 +136,9 @@ async function handleMessage(event) {
       await appendMeta(entry);
 
       const successText =
-        `\u2705 **File uploaded successfully!**\n\n` +
-        `\u{1F4C4} ${entry.originalName}\n` +
+        `\u2705 **${entry.originalName}**\n` +
         `\u{1F4BE} ${formatSize(entry.size)}\n\n` +
-        `\u{1F517} [Direct Link](${entry.url})`;
+        `\`${entry.url}\``;
 
       await editOrSend(msg.chatId, processingMsg, successText);
     } catch (err) {
