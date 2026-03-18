@@ -10,6 +10,7 @@ const ALLOWED_USERS = process.env.ALLOWED_USERS
   : [];
 const BOT_SUBDOMAIN = process.env.BOT_SUBDOMAIN || 'bot';
 const DOMAIN = process.env.DOMAIN;
+const SSL_CERT_PATH = process.env.SSL_CERT_PATH;
 const WEBHOOK_PATH = `/webhook/${TOKEN}`;
 const WEBHOOK_URL = `https://${BOT_SUBDOMAIN}.${DOMAIN}${WEBHOOK_PATH}`;
 
@@ -22,9 +23,16 @@ function isAllowed(userId) {
 async function setupBot(app) {
   bot = new TelegramBot(TOKEN);
 
-  // Set webhook
-  await bot.setWebHook(WEBHOOK_URL);
-  console.log(`[Bot] Webhook set to ${WEBHOOK_URL}`);
+  // Set webhook with Cloudflare Origin CA certificate
+  const certPath = path.resolve(SSL_CERT_PATH);
+  const certDir = path.dirname(certPath);
+  const fullchainPath = path.join(certDir, 'fullchain.pem');
+
+  // Use fullchain if exists, otherwise fallback to cert
+  const certFile = (await fs.pathExists(fullchainPath)) ? fullchainPath : certPath;
+
+  await bot.setWebHook(WEBHOOK_URL, { certificate: certFile });
+  console.log(`[Bot] Webhook set to ${WEBHOOK_URL} (certificate: ${certFile})`);
 
   // Attach webhook handler to Express BEFORE 404 handler
   app.post(WEBHOOK_PATH, (req, res) => {
