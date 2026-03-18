@@ -74,14 +74,14 @@ prompt_default() {
 # ------------------------------
 
 echo -e "${BOLD}── Telegram Credentials ──────────────────────────${NC}"
-prompt_required API_ID    "Telegram API ID"
-prompt_required API_HASH  "Telegram API Hash"
-prompt_required PHONE     "Phone number (e.g. +989123456789)"
+prompt_required API_ID        "Telegram API ID"
+prompt_required API_HASH      "Telegram API Hash"
+prompt_required PHONE         "Phone number (e.g. +989123456789)"
 prompt_required ALLOWED_USERS "Allowed Telegram user IDs (comma-separated)"
 echo ""
 
 echo -e "${BOLD}── Domain Setup ──────────────────────────────────${NC}"
-prompt_required DOMAIN "Main domain (e.g. yourdomain.com)"
+prompt_required DOMAIN        "Main domain (e.g. yourdomain.com)"
 prompt_default  FILES_SUBDOMAIN "Files subdomain" "files"
 echo ""
 
@@ -178,7 +178,7 @@ echo -e "  ${GREEN}✓ Project files ready.${NC}"
 echo -e "  Building SSL fullchain..."
 curl -fsSL https://developers.cloudflare.com/ssl/static/origin_ca_rsa_root.pem -o "${SSL_DIR}/cloudflare_ca.pem"
 cat "${SSL_CERT}" "${SSL_DIR}/cloudflare_ca.pem" > "${SSL_DIR}/fullchain.pem"
-echo -e "  ${GREEN}✓ fullchain.pem created at ${SSL_DIR}/fullchain.pem${NC}"
+echo -e "  ${GREEN}✓ fullchain.pem created.${NC}"
 
 # ------------------------------
 # [3/6] Write .env
@@ -248,11 +248,20 @@ sudo nginx -t && sudo systemctl reload nginx
 echo -e "  ${GREEN}✓ Nginx configured and reloaded.${NC}"
 
 # ------------------------------
-# [6/6] PM2
+# [6/6] Telegram Login
 # ------------------------------
 
-echo -e "\n${GREEN}${BOLD}[6/6] Starting application with PM2...${NC}"
+echo -e "\n${GREEN}${BOLD}[6/6] Telegram Login${NC}"
+echo -e "  ${YELLOW}A verification code will be sent to your Telegram account.${NC}"
+echo -e "  ${YELLOW}Enter it below to complete setup.${NC}"
+echo ""
+
 cd "$INSTALL_DIR"
+node src/login.js
+
+# login.js exits 0 on success, which means SESSION is now in .env
+# Now start PM2
+echo -e "\n${GREEN}${BOLD}Starting application with PM2...${NC}"
 pm2 delete tg-filehost 2>/dev/null || true
 pm2 start ecosystem.config.js
 pm2 save
@@ -274,9 +283,4 @@ echo -e "  ${BOLD}Useful commands:${NC}"
 echo -e "  pm2 status"
 echo -e "  pm2 logs tg-filehost"
 echo -e "  pm2 restart tg-filehost"
-echo ""
-echo -e "${YELLOW}${BOLD}⚠ First Run:${NC}"
-echo -e "${YELLOW}  Telegram will send a verification code to your phone.${NC}"
-echo -e "${YELLOW}  Monitor the logs to enter it:${NC}"
-echo -e "${CYAN}  pm2 logs tg-filehost --raw${NC}"
 echo ""
