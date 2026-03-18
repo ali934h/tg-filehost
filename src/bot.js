@@ -1,7 +1,9 @@
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { NewMessage } = require('telegram/events');
-const { saveFile, listFiles, deleteFile, deleteAllFiles, getTotalStorage, formatSize } = require('./fileManager');
+const { saveFileStream, listFiles, deleteFile, deleteAllFiles, getTotalStorage, formatSize } = require('./fileManager');
+const path = require('path');
+const fs = require('fs-extra');
 
 const API_ID = parseInt(process.env.API_ID);
 const API_HASH = process.env.API_HASH;
@@ -9,19 +11,25 @@ const SESSION = process.env.SESSION || '';
 const ALLOWED_USERS = process.env.ALLOWED_USERS
   ? process.env.ALLOWED_USERS.split(',').map(id => parseInt(id.trim()))
   : [];
+const ALLOWED_CHATS = process.env.ALLOWED_CHATS
+  ? process.env.ALLOWED_CHATS.split(',').map(id => id.trim())
+  : [];
 const FILES_SUBDOMAIN = process.env.FILES_SUBDOMAIN || 'files';
 const DOMAIN = process.env.DOMAIN;
+const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
 
 let client;
 
-function isAllowed(senderId) {
-  return ALLOWED_USERS.includes(Number(senderId));
+function isAllowed(senderId, chatId) {
+  const senderOk = ALLOWED_USERS.includes(Number(senderId));
+  if (!senderOk) return false;
+  // اگه ALLOWED_CHATS خالیه، همه چت‌ها مجازن
+  if (ALLOWED_CHATS.length === 0) return true;
+  return ALLOWED_CHATS.includes(String(chatId));
 }
 
 async function setupUserbot() {
-  if (!SESSION) {
-    throw new Error('SESSION is empty. Please run: node src/login.js');
-  }
+  if (!SESSION) throw new Error('SESSION is empty. Please run: node src/login.js');
 
   client = new TelegramClient(new StringSession(SESSION), API_ID, API_HASH, {
     connectionRetries: 5,
@@ -29,7 +37,6 @@ async function setupUserbot() {
 
   await client.connect();
   console.log('[Bot] Userbot connected.');
-
   client.addEventHandler(handleMessage, new NewMessage({}));
   console.log('[Bot] Ready.');
 }
@@ -37,8 +44,9 @@ async function setupUserbot() {
 async function handleMessage(event) {
   const msg = event.message;
   const senderId = msg.senderId ? msg.senderId.toString() : null;
+  const chatId = msg.chatId ? msg.chatId.toString() : null;
 
-  if (!senderId || !isAllowed(senderId)) return;
+  if (!senderId || !isAllowed(senderId, chatId)) return;
 
   const text = msg.text || '';
 
@@ -56,6 +64,11 @@ async function handleMessage(event) {
     return;
   }
 
+  if (text === '/chatid') {
+    await msg.reply({ message: `🔍 Chat ID: \`${chatId}\`` });
+    return;
+  }
+
   if (text === '/storage') {
     const { count, total } = await getTotalStorage();
     await msg.reply({ message: `📦 **Storage Usage**\n\nFiles: ${count}\nTotal size: ${total}` });
@@ -64,10 +77,7 @@ async function handleMessage(event) {
 
   if (text === '/files') {
     const files = await listFiles();
-    if (files.length === 0) {
-      await msg.reply({ message: '📂 No files found.' });
-      return;
-    }
+    if (files.length === 0) { await msg.reply({ message: '📂 No files found.' }); return; }
     const lines = files.map((f, i) => {
       const date = new Date(f.uploadedAt).toLocaleString('en-GB');
       return `${i + 1}. **${f.originalName}**\n   💾 ${formatSize(f.size)} | 📅 ${date}\n   🔗 ${f.url}\n   🗑 /del_${f.id.split('-')[0]}`;
@@ -98,12 +108,26 @@ async function handleMessage(event) {
     const processingReply = await msg.reply({ message: '⏳ Downloading file...' });
     try {
       const fileInfo = extractFileInfo(msg);
-      const buffer = await client.downloadMedia(msg, { workers: 4 });
-      if (!buffer || buffer.length === 0) {
-        await processingReply.edit({ text: '❌ Could not download this file type.' });
-        return;
-      }
-      const entry = await saveFile(buffer, fileInfo.name, fileInfo.mime, buffer.length);
+      const { uuid, filePath, ext } = await saveFileStream(
+        client,
+        msg,
+        fileInfo.name,
+        fileInfo.mime
+      );
+
+      const stat = await fs.stat(filePath);
+      const entry = {
+        id: uuid,
+        originalName: fileInfo.name,
+        fileName: path.basename(filePath),
+        mimeType: fileInfo.mime,
+        size: stat.size,
+        uploadedAt: new Date().toISOString(),
+        url: `https://${FILES_SUBDOMAIN}.${DOMAIN}/files/${path.basename(filePath)}`
+      };
+
+      await require('./fileManager').appendMeta(entry);
+
       await client.editMessage(msg.chatId, {
         message: processingReply,
         text:
@@ -114,7 +138,9 @@ async function handleMessage(event) {
       });
     } catch (err) {
       console.error('[Bot] Upload error:', err.message);
-      await processingReply.edit({ text: '❌ Failed to download file. Please try again.' });
+      try {
+        await processingReply.edit({ text: '❌ Failed to download file. Please try again.' });
+      } catch (_) {}
     }
   }
 }

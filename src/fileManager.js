@@ -2,17 +2,14 @@ const fs = require('fs-extra');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
-const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
+const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
 const FILES_SUBDOMAIN = process.env.FILES_SUBDOMAIN || 'files';
 const DOMAIN = process.env.DOMAIN;
-
 const META_FILE = path.join(UPLOAD_DIR, '.meta.json');
 
 async function ensureUploadDir() {
   await fs.ensureDir(UPLOAD_DIR);
-  if (!(await fs.pathExists(META_FILE))) {
-    await fs.writeJson(META_FILE, []);
-  }
+  if (!(await fs.pathExists(META_FILE))) await fs.writeJson(META_FILE, []);
 }
 
 async function readMeta() {
@@ -24,16 +21,50 @@ async function writeMeta(data) {
   await fs.writeJson(META_FILE, data, { spaces: 2 });
 }
 
-async function saveFile(fileStream, originalName, mimeType, size) {
+async function appendMeta(entry) {
+  const meta = await readMeta();
+  meta.push(entry);
+  await writeMeta(meta);
+  return entry;
+}
+
+/**
+ * Stream file directly to disk using GramJS iterDownload.
+ * Avoids loading entire file into RAM.
+ */
+async function saveFileStream(client, msg, originalName, mimeType) {
   await ensureUploadDir();
   const ext = path.extname(originalName) || '';
   const uuid = uuidv4();
   const fileName = `${uuid}${ext}`;
   const filePath = path.join(UPLOAD_DIR, fileName);
 
-  await fs.outputFile(filePath, fileStream);
+  const writeStream = fs.createWriteStream(filePath);
 
-  const meta = await readMeta();
+  // GramJS iterDownload streams in chunks
+  for await (const chunk of client.iterDownload({
+    file: msg.media,
+    requestSize: 512 * 1024, // 512KB per chunk
+  })) {
+    writeStream.write(chunk);
+  }
+
+  await new Promise((resolve, reject) => {
+    writeStream.end();
+    writeStream.on('finish', resolve);
+    writeStream.on('error', reject);
+  });
+
+  return { uuid, filePath, ext };
+}
+
+async function saveFile(buffer, originalName, mimeType, size) {
+  await ensureUploadDir();
+  const ext = path.extname(originalName) || '';
+  const uuid = uuidv4();
+  const fileName = `${uuid}${ext}`;
+  const filePath = path.join(UPLOAD_DIR, fileName);
+  await fs.outputFile(filePath, buffer);
   const entry = {
     id: uuid,
     originalName,
@@ -43,25 +74,17 @@ async function saveFile(fileStream, originalName, mimeType, size) {
     uploadedAt: new Date().toISOString(),
     url: `https://${FILES_SUBDOMAIN}.${DOMAIN}/files/${fileName}`
   };
-  meta.push(entry);
-  await writeMeta(meta);
-
+  await appendMeta(entry);
   return entry;
 }
 
-async function listFiles() {
-  return await readMeta();
-}
+async function listFiles() { return await readMeta(); }
 
 async function deleteFile(id) {
   const meta = await readMeta();
   const index = meta.findIndex(f => f.id === id);
   if (index === -1) return false;
-
-  const entry = meta[index];
-  const filePath = path.join(UPLOAD_DIR, entry.fileName);
-  await fs.remove(filePath);
-
+  await fs.remove(path.join(UPLOAD_DIR, meta[index].fileName));
   meta.splice(index, 1);
   await writeMeta(meta);
   return true;
@@ -69,10 +92,7 @@ async function deleteFile(id) {
 
 async function deleteAllFiles() {
   const meta = await readMeta();
-  for (const entry of meta) {
-    const filePath = path.join(UPLOAD_DIR, entry.fileName);
-    await fs.remove(filePath);
-  }
+  for (const entry of meta) await fs.remove(path.join(UPLOAD_DIR, entry.fileName));
   await writeMeta([]);
   return meta.length;
 }
@@ -90,4 +110,4 @@ async function getTotalStorage() {
   return { count: meta.length, total: formatSize(total) };
 }
 
-module.exports = { saveFile, listFiles, deleteFile, deleteAllFiles, getTotalStorage, formatSize };
+module.exports = { saveFile, saveFileStream, appendMeta, listFiles, deleteFile, deleteAllFiles, getTotalStorage, formatSize };
