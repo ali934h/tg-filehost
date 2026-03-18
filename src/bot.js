@@ -20,25 +20,25 @@ const DOMAIN = process.env.DOMAIN;
 let client;
 
 const HELP_TEXT =
-  '📌 **tg-filehost — Help**\n\n' +
+  '\u{1F4CC} **tg-filehost \u2014 Help**\n\n' +
   'Send any file to this chat and the bot will upload it and return a direct CDN link.\n\n' +
-  '─────────────────────────\n' +
-  '🗂 **File Management**\n' +
-  '─────────────────────────\n' +
-  '/files — List all uploaded files with links\n' +
-  '/storage — Show total storage usage\n' +
-  '/del\_<id> — Delete a specific file (ID shown in /files)\n' +
-  '/deleteall — Delete all files\n\n' +
-  '─────────────────────────\n' +
-  'ℹ️ **Other**\n' +
-  '─────────────────────────\n' +
-  '/chatid — Show this chat\'s ID\n' +
-  '/help — Show this message\n\n' +
-  '─────────────────────────\n' +
-  '📎 **How it works**\n' +
-  '─────────────────────────\n' +
+  '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+  '\u{1F5C2} **File Management**\n' +
+  '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+  '`/files` \u2014 List all uploaded files with links\n' +
+  '`/storage` \u2014 Show total storage usage\n' +
+  '`/del_<id>` \u2014 Delete a specific file (ID shown in /files)\n' +
+  '`/deleteall` \u2014 Delete all files\n\n' +
+  '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+  '\u2139\ufe0f **Other**\n' +
+  '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+  '`/chatid` \u2014 Show this chat\'s ID\n' +
+  '`/help` \u2014 Show this message\n\n' +
+  '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
+  '\u{1F4CE} **How it works**\n' +
+  '\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n' +
   '1. Send or forward any file here\n' +
-  '2. Bot replies with ⏳ Downloading file...\n' +
+  '2. Bot replies with \u23f3 Downloading file...\n' +
   '3. Once done, you get a direct link you can tap to copy instantly.';
 
 function isAllowed(senderId, chatId) {
