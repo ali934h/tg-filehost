@@ -27,8 +27,6 @@ async function setupBot(app) {
   const certPath = path.resolve(SSL_CERT_PATH);
   const certDir = path.dirname(certPath);
   const fullchainPath = path.join(certDir, 'fullchain.pem');
-
-  // Use fullchain if exists, otherwise fallback to cert
   const certFile = (await fs.pathExists(fullchainPath)) ? fullchainPath : certPath;
 
   await bot.setWebHook(WEBHOOK_URL, { certificate: certFile });
@@ -49,7 +47,7 @@ async function setupBot(app) {
   bot.onText(/\/start/, (msg) => {
     if (!isAllowed(msg.from.id)) return sendUnauthorized(msg.chat.id);
     bot.sendMessage(msg.chat.id,
-      `👋 Welcome to *tg-filehost*!\n\nSend me any file and I'll give you a direct CDN link.\n\n` +
+      `👋 Welcome to *tg-filehost*!\n\nSend me any file and I'll give you a direct CDN link.\nForwarded messages with files are also supported.\n\n` +
       `*Commands:*\n/files — List all files\n/storage — Storage usage\n/deleteall — Delete all files`,
       { parse_mode: 'Markdown' }
     );
@@ -130,22 +128,32 @@ async function setupBot(app) {
     }
   });
 
-  // File handler
+  // File handler - handles direct uploads, forwards, and messages with captions
   bot.on('message', async (msg) => {
     if (!isAllowed(msg.from.id)) return sendUnauthorized(msg.chat.id);
+
+    // Skip commands
+    if (msg.text && msg.text.startsWith('/')) return;
 
     const fileData = extractFileData(msg);
     if (!fileData) return;
 
-    const { file_id, file_name, mime_type, file_size } = fileData;
-
     const processingMsg = await bot.sendMessage(msg.chat.id, '⏳ Downloading file...');
 
     try {
-      const fileLink = await bot.getFileLink(file_id);
-      const response = await axios({ url: fileLink, method: 'GET', responseType: 'arraybuffer' });
+      const fileInfo = await bot.getFile(fileData.file_id);
+      const fileLink = `https://api.telegram.org/file/bot${TOKEN}/${fileInfo.file_path}`;
+
+      const response = await axios({
+        url: fileLink,
+        method: 'GET',
+        responseType: 'arraybuffer',
+        timeout: 60000,
+        maxContentLength: 50 * 1024 * 1024
+      });
+
       const buffer = Buffer.from(response.data);
-      const entry = await saveFile(buffer, file_name, mime_type, file_size || buffer.length);
+      const entry = await saveFile(buffer, fileData.file_name, fileData.mime_type, buffer.length);
 
       await bot.editMessageText(
         `✅ *File uploaded successfully!*\n\n📄 ${escapeMarkdown(entry.originalName)}\n💾 ${formatSize(entry.size)}\n\n🔗 [Direct Link](${entry.url})`,
@@ -164,16 +172,57 @@ async function setupBot(app) {
 }
 
 function extractFileData(msg) {
-  if (msg.document) return { file_id: msg.document.file_id, file_name: msg.document.file_name || 'file', mime_type: msg.document.mime_type, file_size: msg.document.file_size };
-  if (msg.video) return { file_id: msg.video.file_id, file_name: `video_${Date.now()}.mp4`, mime_type: msg.video.mime_type, file_size: msg.video.file_size };
-  if (msg.audio) return { file_id: msg.audio.file_id, file_name: msg.audio.file_name || `audio_${Date.now()}.mp3`, mime_type: msg.audio.mime_type, file_size: msg.audio.file_size };
-  if (msg.voice) return { file_id: msg.voice.file_id, file_name: `voice_${Date.now()}.ogg`, mime_type: msg.voice.mime_type, file_size: msg.voice.file_size };
+  if (msg.document) return {
+    file_id: msg.document.file_id,
+    file_name: msg.document.file_name || `file_${Date.now()}`,
+    mime_type: msg.document.mime_type || 'application/octet-stream',
+    file_size: msg.document.file_size
+  };
+  if (msg.video) return {
+    file_id: msg.video.file_id,
+    file_name: msg.video.file_name || `video_${Date.now()}.mp4`,
+    mime_type: msg.video.mime_type || 'video/mp4',
+    file_size: msg.video.file_size
+  };
+  if (msg.audio) return {
+    file_id: msg.audio.file_id,
+    file_name: msg.audio.file_name || `audio_${Date.now()}.mp3`,
+    mime_type: msg.audio.mime_type || 'audio/mpeg',
+    file_size: msg.audio.file_size
+  };
+  if (msg.voice) return {
+    file_id: msg.voice.file_id,
+    file_name: `voice_${Date.now()}.ogg`,
+    mime_type: msg.voice.mime_type || 'audio/ogg',
+    file_size: msg.voice.file_size
+  };
   if (msg.photo) {
     const photo = msg.photo[msg.photo.length - 1];
-    return { file_id: photo.file_id, file_name: `photo_${Date.now()}.jpg`, mime_type: 'image/jpeg', file_size: photo.file_size };
+    return {
+      file_id: photo.file_id,
+      file_name: `photo_${Date.now()}.jpg`,
+      mime_type: 'image/jpeg',
+      file_size: photo.file_size
+    };
   }
-  if (msg.sticker) return { file_id: msg.sticker.file_id, file_name: `sticker_${Date.now()}.webp`, mime_type: 'image/webp', file_size: msg.sticker.file_size };
-  if (msg.animation) return { file_id: msg.animation.file_id, file_name: `animation_${Date.now()}.gif`, mime_type: msg.animation.mime_type, file_size: msg.animation.file_size };
+  if (msg.sticker) return {
+    file_id: msg.sticker.file_id,
+    file_name: `sticker_${Date.now()}.${msg.sticker.is_animated ? 'tgs' : msg.sticker.is_video ? 'webm' : 'webp'}`,
+    mime_type: 'image/webp',
+    file_size: msg.sticker.file_size
+  };
+  if (msg.animation) return {
+    file_id: msg.animation.file_id,
+    file_name: msg.animation.file_name || `animation_${Date.now()}.gif`,
+    mime_type: msg.animation.mime_type || 'video/mp4',
+    file_size: msg.animation.file_size
+  };
+  if (msg.video_note) return {
+    file_id: msg.video_note.file_id,
+    file_name: `videonote_${Date.now()}.mp4`,
+    mime_type: 'video/mp4',
+    file_size: msg.video_note.file_size
+  };
   return null;
 }
 
