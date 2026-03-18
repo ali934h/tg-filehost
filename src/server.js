@@ -28,8 +28,8 @@ app.use((req, res) => {
 
 function startServer() {
   return new Promise((resolve) => {
-    const server = app.listen(PORT, 'localhost', () => {
-      console.log(`[Server] Running on localhost:${PORT}`);
+    const server = app.listen(PORT, '127.0.0.1', () => {
+      console.log(`[Server] Running on 127.0.0.1:${PORT}`);
       resolve(server);
     });
   });
