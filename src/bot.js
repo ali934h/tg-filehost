@@ -26,10 +26,15 @@ async function setupBot(app) {
   await bot.setWebHook(WEBHOOK_URL);
   console.log(`[Bot] Webhook set to ${WEBHOOK_URL}`);
 
-  // Attach webhook handler to Express
+  // Attach webhook handler to Express BEFORE 404 handler
   app.post(WEBHOOK_PATH, (req, res) => {
     bot.processUpdate(req.body);
     res.sendStatus(200);
+  });
+
+  // 404 handler - must be registered AFTER webhook route
+  app.use((req, res) => {
+    res.status(404).json({ error: 'Not found' });
   });
 
   // /start
