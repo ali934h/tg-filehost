@@ -1,7 +1,7 @@
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const { NewMessage } = require('telegram/events');
-const { saveFileStream, listFiles, deleteFile, deleteAllFiles, getTotalStorage, formatSize } = require('./fileManager');
+const { saveFileStream, listFiles, deleteFile, deleteAllFiles, getTotalStorage, formatSize, appendMeta } = require('./fileManager');
 const path = require('path');
 const fs = require('fs-extra');
 
@@ -9,7 +9,7 @@ const API_ID = parseInt(process.env.API_ID);
 const API_HASH = process.env.API_HASH;
 const SESSION = process.env.SESSION || '';
 const ALLOWED_USERS = process.env.ALLOWED_USERS
-  ? process.env.ALLOWED_USERS.split(',').map(id => parseInt(id.trim()))
+  ? process.env.ALLOWED_USERS.split(',').map(id => id.trim())
   : [];
 const ALLOWED_CHATS = process.env.ALLOWED_CHATS
   ? process.env.ALLOWED_CHATS.split(',').map(id => id.trim())
@@ -20,12 +20,19 @@ const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
 
 let client;
 
+/**
+ * Channel posts: senderId is null (post is by the channel itself).
+ * - If ALLOWED_CHATS is set: only allow messages from those chat IDs (handles both DM and channel)
+ * - If ALLOWED_CHATS is empty: only allow messages from ALLOWED_USERS (DM/group)
+ */
 function isAllowed(senderId, chatId) {
-  const senderOk = ALLOWED_USERS.includes(Number(senderId));
-  if (!senderOk) return false;
-  // اگه ALLOWED_CHATS خالیه، همه چت‌ها مجازن
-  if (ALLOWED_CHATS.length === 0) return true;
-  return ALLOWED_CHATS.includes(String(chatId));
+  const chatIdStr = String(chatId);
+  const senderIdStr = senderId ? String(senderId) : null;
+
+  if (ALLOWED_CHATS.length > 0) {
+    return ALLOWED_CHATS.includes(chatIdStr);
+  }
+  return senderIdStr ? ALLOWED_USERS.includes(senderIdStr) : false;
 }
 
 async function setupUserbot() {
@@ -46,7 +53,7 @@ async function handleMessage(event) {
   const senderId = msg.senderId ? msg.senderId.toString() : null;
   const chatId = msg.chatId ? msg.chatId.toString() : null;
 
-  if (!senderId || !isAllowed(senderId, chatId)) return;
+  if (!chatId || !isAllowed(senderId, chatId)) return;
 
   const text = msg.text || '';
 
@@ -54,18 +61,19 @@ async function handleMessage(event) {
     await msg.reply({
       message:
         '👋 **Welcome to tg-filehost!**\n\n' +
-        'Send me any file and I\'ll give you a direct CDN link.\n' +
+        'Send any file here and I\'ll give you a direct CDN link.\n' +
         'Forwarded messages with files are also supported.\n\n' +
         '**Commands:**\n' +
-        '/files — List all files\n' +
+        '/files — List all uploaded files\n' +
         '/storage — Storage usage\n' +
-        '/deleteall — Delete all files'
+        '/deleteall — Delete all files\n' +
+        '/chatid — Show this chat\'s ID'
     });
     return;
   }
 
   if (text === '/chatid') {
-    await msg.reply({ message: `🔍 Chat ID: \`${chatId}\`` });
+    await msg.reply({ message: `🔍 **Chat ID:** \`${chatId}\`` });
     return;
   }
 
@@ -108,13 +116,7 @@ async function handleMessage(event) {
     const processingReply = await msg.reply({ message: '⏳ Downloading file...' });
     try {
       const fileInfo = extractFileInfo(msg);
-      const { uuid, filePath, ext } = await saveFileStream(
-        client,
-        msg,
-        fileInfo.name,
-        fileInfo.mime
-      );
-
+      const { uuid, filePath } = await saveFileStream(client, msg, fileInfo.name, fileInfo.mime);
       const stat = await fs.stat(filePath);
       const entry = {
         id: uuid,
@@ -125,9 +127,7 @@ async function handleMessage(event) {
         uploadedAt: new Date().toISOString(),
         url: `https://${FILES_SUBDOMAIN}.${DOMAIN}/files/${path.basename(filePath)}`
       };
-
-      await require('./fileManager').appendMeta(entry);
-
+      await appendMeta(entry);
       await client.editMessage(msg.chatId, {
         message: processingReply,
         text:
@@ -138,9 +138,7 @@ async function handleMessage(event) {
       });
     } catch (err) {
       console.error('[Bot] Upload error:', err.message);
-      try {
-        await processingReply.edit({ text: '❌ Failed to download file. Please try again.' });
-      } catch (_) {}
+      try { await processingReply.edit({ text: '❌ Failed to download file. Please try again.' }); } catch (_) {}
     }
   }
 }
