@@ -39,16 +39,15 @@ read -rp "$(echo -e ${CYAN}"Main domain (e.g. yourdomain.com): "${NC})" DOMAIN
 read -rp "$(echo -e ${CYAN}"Files subdomain [default: files]: "${NC})" FILES_SUBDOMAIN
 FILES_SUBDOMAIN=${FILES_SUBDOMAIN:-files}
 
-echo -e "${YELLOW}"
-echo "  SSL Certificate Directory"
-echo "  The directory must contain:"
-echo "    cert.crt    ← Public Key (Cloudflare Origin Certificate)"
-echo "    private.key ← Private Key"
-echo -e "${NC}"
-read -rp "$(echo -e ${CYAN}"SSL certificate directory path: "${NC})" SSL_DIR
-[[ -z "$SSL_DIR" ]] && echo -e "${RED}Error: SSL directory is required.${NC}" && exit 1
-[[ ! -f "${SSL_DIR}/cert.crt" ]] && echo -e "${RED}Error: cert.crt not found in ${SSL_DIR}${NC}" && exit 1
-[[ ! -f "${SSL_DIR}/private.key" ]] && echo -e "${RED}Error: private.key not found in ${SSL_DIR}${NC}" && exit 1
+read -rp "$(echo -e ${CYAN}"SSL Public Key path (e.g. /root/certs/cert.crt): "${NC})" SSL_CERT
+[[ -z "$SSL_CERT" ]] && echo -e "${RED}Error: SSL public key path is required.${NC}" && exit 1
+[[ ! -f "$SSL_CERT" ]] && echo -e "${RED}Error: File not found: ${SSL_CERT}${NC}" && exit 1
+
+read -rp "$(echo -e ${CYAN}"SSL Private Key path (e.g. /root/certs/private.key): "${NC})" SSL_KEY
+[[ -z "$SSL_KEY" ]] && echo -e "${RED}Error: SSL private key path is required.${NC}" && exit 1
+[[ ! -f "$SSL_KEY" ]] && echo -e "${RED}Error: File not found: ${SSL_KEY}${NC}" && exit 1
+
+SSL_DIR=$(dirname "$SSL_CERT")
 
 read -rp "$(echo -e ${CYAN}"Upload directory [default: /var/www/tg-filehost/uploads]: "${NC})" UPLOAD_DIR
 UPLOAD_DIR=${UPLOAD_DIR:-/var/www/tg-filehost/uploads}
@@ -62,7 +61,8 @@ echo ""
 echo -e "${YELLOW}--- Configuration Summary ---${NC}"
 echo -e "  Domain        : ${DOMAIN}"
 echo -e "  Files URL     : https://${FILES_SUBDOMAIN}.${DOMAIN}/files/"
-echo -e "  SSL Dir       : ${SSL_DIR}"
+echo -e "  SSL Cert      : ${SSL_CERT}"
+echo -e "  SSL Key       : ${SSL_KEY}"
 echo -e "  Upload dir    : ${UPLOAD_DIR}"
 echo -e "  Express port  : ${PORT}"
 echo -e "  Install dir   : ${INSTALL_DIR}"
@@ -119,8 +119,8 @@ mkdir -p "$UPLOAD_DIR" "$INSTALL_DIR/logs"
 # Build fullchain for Nginx
 echo -e "  Building SSL fullchain..."
 curl -fsSL https://developers.cloudflare.com/ssl/static/origin_ca_rsa_root.pem -o "${SSL_DIR}/cloudflare_ca.pem"
-cat "${SSL_DIR}/cert.crt" "${SSL_DIR}/cloudflare_ca.pem" > "${SSL_DIR}/fullchain.pem"
-echo -e "  fullchain.pem created."
+cat "${SSL_CERT}" "${SSL_DIR}/cloudflare_ca.pem" > "${SSL_DIR}/fullchain.pem"
+echo -e "  fullchain.pem created at ${SSL_DIR}/fullchain.pem"
 
 # ------------------------------
 # Write .env
@@ -138,7 +138,9 @@ DOMAIN=${DOMAIN}
 FILES_SUBDOMAIN=${FILES_SUBDOMAIN}
 PORT=${PORT}
 UPLOAD_DIR=${UPLOAD_DIR}
-SSL_DIR=${SSL_DIR}
+SSL_CERT=${SSL_CERT}
+SSL_KEY=${SSL_KEY}
+SSL_FULLCHAIN=${SSL_DIR}/fullchain.pem
 EOF
 
 echo -e "  .env written."
@@ -163,7 +165,7 @@ server {
     server_name ${FILES_SUBDOMAIN}.${DOMAIN};
 
     ssl_certificate     ${SSL_DIR}/fullchain.pem;
-    ssl_certificate_key ${SSL_DIR}/private.key;
+    ssl_certificate_key ${SSL_KEY};
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
