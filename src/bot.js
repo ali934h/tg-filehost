@@ -19,6 +19,28 @@ const DOMAIN = process.env.DOMAIN;
 
 let client;
 
+const HELP_TEXT =
+  '📌 **tg-filehost — Help**\n\n' +
+  'Send any file to this chat and the bot will upload it and return a direct CDN link.\n\n' +
+  '─────────────────────────\n' +
+  '🗂 **File Management**\n' +
+  '─────────────────────────\n' +
+  '/files — List all uploaded files with links\n' +
+  '/storage — Show total storage usage\n' +
+  '/del\_<id> — Delete a specific file (ID shown in /files)\n' +
+  '/deleteall — Delete all files\n\n' +
+  '─────────────────────────\n' +
+  'ℹ️ **Other**\n' +
+  '─────────────────────────\n' +
+  '/chatid — Show this chat\'s ID\n' +
+  '/help — Show this message\n\n' +
+  '─────────────────────────\n' +
+  '📎 **How it works**\n' +
+  '─────────────────────────\n' +
+  '1. Send or forward any file here\n' +
+  '2. Bot replies with ⏳ Downloading file...\n' +
+  '3. Once done, you get a direct link you can tap to copy instantly.';
+
 function isAllowed(senderId, chatId) {
   const chatIdStr = String(chatId);
   const senderIdStr = senderId ? String(senderId) : null;
@@ -65,16 +87,8 @@ async function handleMessage(event) {
 
   const text = (msg.text || '').trim();
 
-  if (text === '/start') {
-    await sendReply(msg,
-      '\u{1F44B} **Welcome to tg-filehost!**\n\n' +
-      'Send any file here and I\'ll give you a direct CDN link.\n\n' +
-      '**Commands:**\n' +
-      '/files \u2014 List all uploaded files\n' +
-      '/storage \u2014 Storage usage\n' +
-      '/deleteall \u2014 Delete all files\n' +
-      '/chatid \u2014 Show this chat\'s ID'
-    );
+  if (text === '/start' || text === '/help') {
+    await sendReply(msg, HELP_TEXT);
     return;
   }
 
