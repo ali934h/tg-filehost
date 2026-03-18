@@ -41,14 +41,6 @@ prompt_required() {
   done
 }
 
-prompt_optional() {
-  local var_name="$1"
-  local prompt_text="$2"
-  local value
-  read -rp "$(echo -e ${CYAN}"${prompt_text}: "${NC})" value
-  eval "$var_name='$value'"
-}
-
 prompt_file() {
   local var_name="$1"
   local prompt_text="$2"
@@ -257,35 +249,16 @@ sudo nginx -t && sudo systemctl reload nginx
 echo -e "  ${GREEN}✓ Nginx configured and reloaded.${NC}"
 
 # ------------------------------
-# [6/6] Telegram Login
+# [6/6] Telegram Login & Channel Setup
 # ------------------------------
 
-echo -e "\n${GREEN}${BOLD}[6/6] Telegram Login${NC}"
+echo -e "\n${GREEN}${BOLD}[6/6] Telegram Login & Channel Setup${NC}"
 echo -e "  ${YELLOW}A verification code will be sent to your Telegram account.${NC}"
-echo -e "  ${YELLOW}Enter it below to complete setup.${NC}"
+echo -e "  ${YELLOW}After login, enter your private channel invite link.${NC}"
 echo ""
 
 cd "$INSTALL_DIR"
 node src/login.js
-
-# ------------------------------
-# Allowed Chats (after login)
-# ------------------------------
-
-echo ""
-echo -e "${BOLD}── Allowed Chats (Optional) ───────────────────────${NC}"
-echo -e "  ${YELLOW}You can limit the bot to only accept files from specific chats.${NC}"
-echo -e "  ${YELLOW}To find a Chat ID: go to your channel/group and send /chatid${NC}"
-echo -e "  ${YELLOW}Leave empty to allow files from ALL chats (not recommended).${NC}"
-echo ""
-prompt_optional ALLOWED_CHATS "Allowed Chat IDs (comma-separated, or press Enter to skip)"
-
-if [[ -n "$ALLOWED_CHATS" ]]; then
-  sed -i "s/^ALLOWED_CHATS=.*/ALLOWED_CHATS=${ALLOWED_CHATS}/" "$INSTALL_DIR/.env"
-  echo -e "  ${GREEN}✓ ALLOWED_CHATS saved.${NC}"
-else
-  echo -e "  ${YELLOW}  Skipped. You can add it later in .env and restart PM2.${NC}"
-fi
 
 # ------------------------------
 # Start PM2
@@ -314,10 +287,3 @@ echo -e "  pm2 status"
 echo -e "  pm2 logs tg-filehost"
 echo -e "  pm2 restart tg-filehost"
 echo ""
-if [[ -z "$ALLOWED_CHATS" ]]; then
-  echo -e "  ${YELLOW}⚠ Tip: To restrict to a specific chat:${NC}"
-  echo -e "  ${YELLOW}  1. Send /chatid in your desired channel/group${NC}"
-  echo -e "  ${YELLOW}  2. Add the ID to ALLOWED_CHATS in /var/www/tg-filehost/.env${NC}"
-  echo -e "  ${YELLOW}  3. Run: pm2 restart tg-filehost${NC}"
-  echo ""
-fi
