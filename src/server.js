@@ -7,6 +7,9 @@ const app = express();
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
 const PORT = process.env.PORT || 3000;
 
+// Parse JSON bodies (must be before routes)
+app.use(express.json());
+
 // Serve uploaded files
 app.use('/files', express.static(UPLOAD_DIR, {
   dotfiles: 'deny',
@@ -18,13 +21,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', uptime: process.uptime() });
 });
 
-// Handle webhook path - will be attached by bot.js
-app.use(express.json());
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
+// Note: webhook route and 404 handler are registered in bot.js after setup
 
 function startServer() {
   return new Promise((resolve) => {
