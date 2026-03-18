@@ -16,23 +16,38 @@ const ALLOWED_CHATS = process.env.ALLOWED_CHATS
   : [];
 const FILES_SUBDOMAIN = process.env.FILES_SUBDOMAIN || 'files';
 const DOMAIN = process.env.DOMAIN;
-const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
 
 let client;
 
-/**
- * Channel posts: senderId is null (post is by the channel itself).
- * - If ALLOWED_CHATS is set: only allow messages from those chat IDs (handles both DM and channel)
- * - If ALLOWED_CHATS is empty: only allow messages from ALLOWED_USERS (DM/group)
- */
 function isAllowed(senderId, chatId) {
   const chatIdStr = String(chatId);
   const senderIdStr = senderId ? String(senderId) : null;
-
-  if (ALLOWED_CHATS.length > 0) {
-    return ALLOWED_CHATS.includes(chatIdStr);
-  }
+  if (ALLOWED_CHATS.length > 0) return ALLOWED_CHATS.includes(chatIdStr);
   return senderIdStr ? ALLOWED_USERS.includes(senderIdStr) : false;
+}
+
+/**
+ * Send a reply. In channels, msg.reply() uses editMessage internally which
+ * can fail with MESSAGE_NOT_MODIFIED. We use client.sendMessage directly.
+ */
+async function sendReply(msg, text) {
+  return await client.sendMessage(msg.chatId, {
+    message: text,
+    replyTo: msg.id,
+  });
+}
+
+/**
+ * Edit a previously sent message safely.
+ * Falls back to sending a new message if edit fails.
+ */
+async function editOrSend(chatId, sentMsg, text) {
+  try {
+    await client.editMessage(chatId, { message: sentMsg, text });
+  } catch (e) {
+    // MESSAGE_NOT_MODIFIED or edit not allowed in channel
+    await client.sendMessage(chatId, { message: text });
+  }
 }
 
 async function setupUserbot() {
@@ -40,6 +55,7 @@ async function setupUserbot() {
 
   client = new TelegramClient(new StringSession(SESSION), API_ID, API_HASH, {
     connectionRetries: 5,
+    retryDelay: 1000,
   });
 
   await client.connect();
@@ -55,43 +71,41 @@ async function handleMessage(event) {
 
   if (!chatId || !isAllowed(senderId, chatId)) return;
 
-  const text = msg.text || '';
+  const text = (msg.text || '').trim();
 
   if (text === '/start') {
-    await msg.reply({
-      message:
-        '👋 **Welcome to tg-filehost!**\n\n' +
-        'Send any file here and I\'ll give you a direct CDN link.\n' +
-        'Forwarded messages with files are also supported.\n\n' +
-        '**Commands:**\n' +
-        '/files — List all uploaded files\n' +
-        '/storage — Storage usage\n' +
-        '/deleteall — Delete all files\n' +
-        '/chatid — Show this chat\'s ID'
-    });
+    await sendReply(msg,
+      '\u{1F44B} **Welcome to tg-filehost!**\n\n' +
+      'Send any file here and I\'ll give you a direct CDN link.\n\n' +
+      '**Commands:**\n' +
+      '/files \u2014 List all uploaded files\n' +
+      '/storage \u2014 Storage usage\n' +
+      '/deleteall \u2014 Delete all files\n' +
+      '/chatid \u2014 Show this chat\'s ID'
+    );
     return;
   }
 
   if (text === '/chatid') {
-    await msg.reply({ message: `🔍 **Chat ID:** \`${chatId}\`` });
+    await sendReply(msg, `\u{1F50D} **Chat ID:** \`${chatId}\``);
     return;
   }
 
   if (text === '/storage') {
     const { count, total } = await getTotalStorage();
-    await msg.reply({ message: `📦 **Storage Usage**\n\nFiles: ${count}\nTotal size: ${total}` });
+    await sendReply(msg, `\u{1F4E6} **Storage Usage**\n\nFiles: ${count}\nTotal size: ${total}`);
     return;
   }
 
   if (text === '/files') {
     const files = await listFiles();
-    if (files.length === 0) { await msg.reply({ message: '📂 No files found.' }); return; }
+    if (files.length === 0) { await sendReply(msg, '\u{1F4C2} No files found.'); return; }
     const lines = files.map((f, i) => {
       const date = new Date(f.uploadedAt).toLocaleString('en-GB');
-      return `${i + 1}. **${f.originalName}**\n   💾 ${formatSize(f.size)} | 📅 ${date}\n   🔗 ${f.url}\n   🗑 /del_${f.id.split('-')[0]}`;
+      return `${i + 1}. **${f.originalName}**\n   \u{1F4BE} ${formatSize(f.size)} | \u{1F4C5} ${date}\n   \u{1F517} ${f.url}\n   \u{1F5D1} /del_${f.id.split('-')[0]}`;
     });
     for (const chunk of chunkArray(lines, 10)) {
-      await msg.reply({ message: chunk.join('\n\n') });
+      await sendReply(msg, chunk.join('\n\n'));
     }
     return;
   }
@@ -100,20 +114,20 @@ async function handleMessage(event) {
     const shortId = text.replace('/del_', '').trim();
     const files = await listFiles();
     const file = files.find(f => f.id.startsWith(shortId));
-    if (!file) { await msg.reply({ message: '❌ File not found.' }); return; }
+    if (!file) { await sendReply(msg, '\u274C File not found.'); return; }
     await deleteFile(file.id);
-    await msg.reply({ message: `✅ Deleted: **${file.originalName}**` });
+    await sendReply(msg, `\u2705 Deleted: **${file.originalName}**`);
     return;
   }
 
   if (text === '/deleteall') {
     const count = await deleteAllFiles();
-    await msg.reply({ message: `✅ Deleted ${count} file(s).` });
+    await sendReply(msg, `\u2705 Deleted ${count} file(s).`);
     return;
   }
 
   if (msg.media) {
-    const processingReply = await msg.reply({ message: '⏳ Downloading file...' });
+    const processingMsg = await sendReply(msg, '\u23F3 Downloading file...');
     try {
       const fileInfo = extractFileInfo(msg);
       const { uuid, filePath } = await saveFileStream(client, msg, fileInfo.name, fileInfo.mime);
@@ -128,17 +142,19 @@ async function handleMessage(event) {
         url: `https://${FILES_SUBDOMAIN}.${DOMAIN}/files/${path.basename(filePath)}`
       };
       await appendMeta(entry);
-      await client.editMessage(msg.chatId, {
-        message: processingReply,
-        text:
-          `✅ **File uploaded successfully!**\n\n` +
-          `📄 ${entry.originalName}\n` +
-          `💾 ${formatSize(entry.size)}\n\n` +
-          `🔗 [Direct Link](${entry.url})`
-      });
+
+      const successText =
+        `\u2705 **File uploaded successfully!**\n\n` +
+        `\u{1F4C4} ${entry.originalName}\n` +
+        `\u{1F4BE} ${formatSize(entry.size)}\n\n` +
+        `\u{1F517} [Direct Link](${entry.url})`;
+
+      await editOrSend(msg.chatId, processingMsg, successText);
     } catch (err) {
       console.error('[Bot] Upload error:', err.message);
-      try { await processingReply.edit({ text: '❌ Failed to download file. Please try again.' }); } catch (_) {}
+      try {
+        await editOrSend(msg.chatId, processingMsg, '\u274C Failed to download file. Please try again.');
+      } catch (_) {}
     }
   }
 }

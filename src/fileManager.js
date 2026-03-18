@@ -30,7 +30,7 @@ async function appendMeta(entry) {
 
 /**
  * Stream file directly to disk using GramJS iterDownload.
- * Avoids loading entire file into RAM.
+ * Uses 1MB chunks for better throughput on large files.
  */
 async function saveFileStream(client, msg, originalName, mimeType) {
   await ensureUploadDir();
@@ -41,12 +41,14 @@ async function saveFileStream(client, msg, originalName, mimeType) {
 
   const writeStream = fs.createWriteStream(filePath);
 
-  // GramJS iterDownload streams in chunks
   for await (const chunk of client.iterDownload({
     file: msg.media,
-    requestSize: 512 * 1024, // 512KB per chunk
+    requestSize: 1024 * 1024, // 1MB per chunk for better throughput
   })) {
-    writeStream.write(chunk);
+    if (!writeStream.write(chunk)) {
+      // Backpressure: wait for drain
+      await new Promise(resolve => writeStream.once('drain', resolve));
+    }
   }
 
   await new Promise((resolve, reject) => {
