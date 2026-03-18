@@ -1,16 +1,16 @@
 {
   "name": "tg-filehost",
-  "version": "1.0.0",
-  "description": "Telegram bot that downloads files and serves them via Cloudflare CDN",
+  "version": "2.0.0",
+  "description": "Telegram userbot that downloads files and serves them via Cloudflare CDN",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.66.0",
+    "telegram": "^2.19.7",
+    "input": "^1.0.1",
     "express": "^4.18.2",
-    "axios": "^1.6.0",
     "dotenv": "^16.3.1",
     "uuid": "^9.0.0",
     "fs-extra": "^11.2.0"

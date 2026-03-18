@@ -1,11 +1,11 @@
 require('dotenv').config();
-const { app, startServer } = require('./server');
-const { setupBot } = require('./bot');
+const { startServer } = require('./server');
+const { setupUserbot } = require('./bot');
 
 async function main() {
   try {
     await startServer();
-    await setupBot(app);
+    await setupUserbot();
     console.log('[App] tg-filehost is running.');
   } catch (err) {
     console.error('[App] Fatal error:', err.message);

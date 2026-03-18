@@ -10,7 +10,7 @@ NC='\033[0m'
 echo -e "${CYAN}"
 echo '  _                __ _ _     _               _'
 echo ' | |_ __ _ ____  / _(_) |___| |_  ___  ___ | |_'
-echo " | __/ _\` |_  / | |_| | / -_) ' \/ _ \(_-< |  _|"
+echo " | __/ _\` |_  / | |_| | / -_) ' \\/ _ \\(_-< |  _|"
 echo ' |__\__,_/__/ |_|  _|_|_\___|_||_\___//__/  \__|'
 echo '              |_|'
 echo -e "${NC}"
@@ -21,8 +21,14 @@ echo ""
 # Collect user input
 # ------------------------------
 
-read -rp "$(echo -e ${CYAN}"Bot Token (from @BotFather): "${NC})" BOT_TOKEN
-[[ -z "$BOT_TOKEN" ]] && echo -e "${RED}Error: Bot token is required.${NC}" && exit 1
+read -rp "$(echo -e ${CYAN}"Telegram API ID (from https://my.telegram.org): "${NC})" API_ID
+[[ -z "$API_ID" ]] && echo -e "${RED}Error: API ID is required.${NC}" && exit 1
+
+read -rp "$(echo -e ${CYAN}"Telegram API Hash: "${NC})" API_HASH
+[[ -z "$API_HASH" ]] && echo -e "${RED}Error: API Hash is required.${NC}" && exit 1
+
+read -rp "$(echo -e ${CYAN}"Telegram phone number (e.g. +989123456789): "${NC})" PHONE
+[[ -z "$PHONE" ]] && echo -e "${RED}Error: Phone number is required.${NC}" && exit 1
 
 read -rp "$(echo -e ${CYAN}"Allowed user IDs (comma-separated, e.g. 123456,789012): "${NC})" ALLOWED_USERS
 [[ -z "$ALLOWED_USERS" ]] && echo -e "${RED}Error: At least one user ID is required.${NC}" && exit 1
@@ -33,14 +39,16 @@ read -rp "$(echo -e ${CYAN}"Main domain (e.g. yourdomain.com): "${NC})" DOMAIN
 read -rp "$(echo -e ${CYAN}"Files subdomain [default: files]: "${NC})" FILES_SUBDOMAIN
 FILES_SUBDOMAIN=${FILES_SUBDOMAIN:-files}
 
-read -rp "$(echo -e ${CYAN}"Bot subdomain [default: bot]: "${NC})" BOT_SUBDOMAIN
-BOT_SUBDOMAIN=${BOT_SUBDOMAIN:-bot}
-
-read -rp "$(echo -e ${CYAN}"SSL Certificate path (.pem): "${NC})" SSL_CERT_PATH
-[[ ! -f "$SSL_CERT_PATH" ]] && echo -e "${RED}Error: Certificate file not found.${NC}" && exit 1
-
-read -rp "$(echo -e ${CYAN}"SSL Private Key path (.key): "${NC})" SSL_KEY_PATH
-[[ ! -f "$SSL_KEY_PATH" ]] && echo -e "${RED}Error: Private key file not found.${NC}" && exit 1
+echo -e "${YELLOW}"
+echo "  SSL Certificate Directory"
+echo "  The directory must contain:"
+echo "    cert.crt    ← Public Key (Cloudflare Origin Certificate)"
+echo "    private.key ← Private Key"
+echo -e "${NC}"
+read -rp "$(echo -e ${CYAN}"SSL certificate directory path: "${NC})" SSL_DIR
+[[ -z "$SSL_DIR" ]] && echo -e "${RED}Error: SSL directory is required.${NC}" && exit 1
+[[ ! -f "${SSL_DIR}/cert.crt" ]] && echo -e "${RED}Error: cert.crt not found in ${SSL_DIR}${NC}" && exit 1
+[[ ! -f "${SSL_DIR}/private.key" ]] && echo -e "${RED}Error: private.key not found in ${SSL_DIR}${NC}" && exit 1
 
 read -rp "$(echo -e ${CYAN}"Upload directory [default: /var/www/tg-filehost/uploads]: "${NC})" UPLOAD_DIR
 UPLOAD_DIR=${UPLOAD_DIR:-/var/www/tg-filehost/uploads}
@@ -54,7 +62,7 @@ echo ""
 echo -e "${YELLOW}--- Configuration Summary ---${NC}"
 echo -e "  Domain        : ${DOMAIN}"
 echo -e "  Files URL     : https://${FILES_SUBDOMAIN}.${DOMAIN}/files/"
-echo -e "  Webhook URL   : https://${BOT_SUBDOMAIN}.${DOMAIN}/webhook/***"
+echo -e "  SSL Dir       : ${SSL_DIR}"
 echo -e "  Upload dir    : ${UPLOAD_DIR}"
 echo -e "  Express port  : ${PORT}"
 echo -e "  Install dir   : ${INSTALL_DIR}"
@@ -68,7 +76,7 @@ read -rp "$(echo -e ${YELLOW}"Proceed with installation? [y/N]: "${NC})" CONFIRM
 
 echo -e "\n${GREEN}[1/6] Checking system dependencies...${NC}"
 
-if ! command -v node &>/dev/null || [[ $(node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)") ]]; then
+if ! command -v node &>/dev/null || node -e "process.exit(parseInt(process.version.slice(1)) < 18 ? 1 : 0)" 2>/dev/null; then
   echo -e "${YELLOW}Installing Node.js 20...${NC}"
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
   sudo apt-get install -y nodejs
@@ -96,7 +104,7 @@ fi
 
 echo -e "\n${GREEN}[2/6] Setting up project files...${NC}"
 
-if [[ -d "$INSTALL_DIR" ]]; then
+if [[ -d "$INSTALL_DIR/.git" ]]; then
   echo -e "  Directory exists, pulling latest changes..."
   cd "$INSTALL_DIR" && git pull
 else
@@ -106,7 +114,13 @@ else
   cd "$INSTALL_DIR"
 fi
 
-mkdir -p "$UPLOAD_DIR" logs
+mkdir -p "$UPLOAD_DIR" "$INSTALL_DIR/logs"
+
+# Build fullchain for Nginx
+echo -e "  Building SSL fullchain..."
+curl -fsSL https://developers.cloudflare.com/ssl/static/origin_ca_rsa_root.pem -o "${SSL_DIR}/cloudflare_ca.pem"
+cat "${SSL_DIR}/cert.crt" "${SSL_DIR}/cloudflare_ca.pem" > "${SSL_DIR}/fullchain.pem"
+echo -e "  fullchain.pem created."
 
 # ------------------------------
 # Write .env
@@ -115,15 +129,16 @@ mkdir -p "$UPLOAD_DIR" logs
 echo -e "\n${GREEN}[3/6] Writing .env file...${NC}"
 
 cat > "$INSTALL_DIR/.env" <<EOF
-BOT_TOKEN=${BOT_TOKEN}
+API_ID=${API_ID}
+API_HASH=${API_HASH}
+PHONE=${PHONE}
+SESSION=
 ALLOWED_USERS=${ALLOWED_USERS}
 DOMAIN=${DOMAIN}
 FILES_SUBDOMAIN=${FILES_SUBDOMAIN}
-BOT_SUBDOMAIN=${BOT_SUBDOMAIN}
 PORT=${PORT}
 UPLOAD_DIR=${UPLOAD_DIR}
-SSL_CERT_PATH=${SSL_CERT_PATH}
-SSL_KEY_PATH=${SSL_KEY_PATH}
+SSL_DIR=${SSL_DIR}
 EOF
 
 echo -e "  .env written."
@@ -147,8 +162,8 @@ server {
     listen 443 ssl;
     server_name ${FILES_SUBDOMAIN}.${DOMAIN};
 
-    ssl_certificate     ${SSL_CERT_PATH};
-    ssl_certificate_key ${SSL_KEY_PATH};
+    ssl_certificate     ${SSL_DIR}/fullchain.pem;
+    ssl_certificate_key ${SSL_DIR}/private.key;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
@@ -158,31 +173,8 @@ server {
         add_header Cache-Control "public, max-age=31536000, immutable";
     }
 
-    location / {
-        return 404;
-    }
-}
-
-# --- Bot subdomain ---
-server {
-    listen 443 ssl;
-    server_name ${BOT_SUBDOMAIN}.${DOMAIN};
-
-    ssl_certificate     ${SSL_CERT_PATH};
-    ssl_certificate_key ${SSL_KEY_PATH};
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-
-    location /webhook/ {
-        proxy_pass         http://localhost:${PORT};
-        proxy_http_version 1.1;
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_read_timeout 60s;
-    }
-
     location /health {
-        proxy_pass http://localhost:${PORT};
+        proxy_pass http://127.0.0.1:${PORT};
     }
 
     location / {
@@ -210,8 +202,11 @@ echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}  tg-filehost installed successfully!${NC}"
 echo -e "${GREEN}========================================${NC}"
-echo -e "  Files URL : https://${FILES_SUBDOMAIN}.${DOMAIN}/files/"
-echo -e "  Bot health: https://${BOT_SUBDOMAIN}.${DOMAIN}/health"
-echo -e "  PM2 status: pm2 status"
-echo -e "  PM2 logs  : pm2 logs tg-filehost"
+echo -e "  Files URL  : https://${FILES_SUBDOMAIN}.${DOMAIN}/files/"
+echo -e "  Health     : https://${FILES_SUBDOMAIN}.${DOMAIN}/health"
+echo -e "  PM2 status : pm2 status"
+echo -e "  PM2 logs   : pm2 logs tg-filehost"
+echo ""
+echo -e "${YELLOW}NOTE: On first run, you will be prompted to enter your Telegram verification code.${NC}"
+echo -e "${YELLOW}Run: pm2 logs tg-filehost --raw to see the prompt.${NC}"
 echo ""
