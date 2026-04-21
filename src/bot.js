@@ -14,8 +14,7 @@ const ALLOWED_USERS = process.env.ALLOWED_USERS
 const ALLOWED_CHATS = process.env.ALLOWED_CHATS
   ? process.env.ALLOWED_CHATS.split(',').map(id => id.trim())
   : [];
-const FILES_SUBDOMAIN = process.env.FILES_SUBDOMAIN || 'files';
-const DOMAIN = process.env.DOMAIN;
+const HOST = process.env.HOST;
 
 let client;
 
@@ -145,7 +144,7 @@ async function handleMessage(event) {
         mimeType: fileInfo.mime,
         size: stat.size,
         uploadedAt: new Date().toISOString(),
-        url: `https://${FILES_SUBDOMAIN}.${DOMAIN}/files/${path.basename(filePath)}`
+        url: `https://${HOST}/files/${path.basename(filePath)}`
       };
       await appendMeta(entry);
 
