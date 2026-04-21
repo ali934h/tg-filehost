@@ -167,6 +167,8 @@ echo -e "  Node.js port  : 127.0.0.1:${PORT} (internal only)"
 echo -e "  Nginx config  : ${NGINX_CONF}"
 echo -e "  Install dir   : ${INSTALL_DIR}"
 echo ""
+echo -e "  ${YELLOW}${BOLD}Warning: Any previous installation will be fully removed.${NC}"
+echo ""
 
 while true; do
   read -rp "$(echo -e ${YELLOW}"Proceed with installation? [y/n]: "${NC})" CONFIRM
@@ -176,6 +178,44 @@ while true; do
     *) echo -e "  ${RED}✗ Please enter y or n.${NC}" ;;
   esac
 done
+
+# ------------------------------
+# [0/6] Cleanup previous install
+# ------------------------------
+
+echo -e "\n${GREEN}${BOLD}[0/6] Cleaning up previous installation...${NC}"
+
+# Stop and remove PM2 process
+if command -v pm2 &>/dev/null; then
+  pm2 delete tg-filehost 2>/dev/null && echo -e "  ${YELLOW}PM2 process removed.${NC}" || true
+  pm2 save --force 2>/dev/null || true
+fi
+
+# Remove nginx config (with backup if exists)
+if [[ -f "$NGINX_CONF" ]]; then
+  BACKUP_PATH="${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
+  sudo cp "$NGINX_CONF" "$BACKUP_PATH"
+  sudo rm -f "$NGINX_CONF"
+  echo -e "  ${YELLOW}Nginx config backed up to: ${BACKUP_PATH} and removed.${NC}"
+fi
+
+# Remove old sites-enabled symlink (legacy)
+if [[ -L /etc/nginx/sites-enabled/tg-filehost ]]; then
+  sudo rm /etc/nginx/sites-enabled/tg-filehost
+  echo -e "  ${YELLOW}Removed old sites-enabled symlink.${NC}"
+fi
+if [[ -f /etc/nginx/sites-available/tg-filehost ]]; then
+  sudo rm /etc/nginx/sites-available/tg-filehost
+  echo -e "  ${YELLOW}Removed old sites-available config.${NC}"
+fi
+
+# Remove previous project directory entirely
+if [[ -d "$INSTALL_DIR" ]]; then
+  sudo rm -rf "$INSTALL_DIR"
+  echo -e "  ${YELLOW}Removed old install directory: ${INSTALL_DIR}${NC}"
+fi
+
+echo -e "  ${GREEN}✓ Cleanup complete.${NC}"
 
 # ------------------------------
 # [1/6] System dependencies
@@ -216,15 +256,10 @@ fi
 
 echo -e "\n${GREEN}${BOLD}[2/6] Setting up project files...${NC}"
 
-if [[ -d "$INSTALL_DIR/.git" ]]; then
-  echo -e "  ${YELLOW}Directory exists, pulling latest changes...${NC}"
-  cd "$INSTALL_DIR" && git pull
-else
-  sudo mkdir -p "$INSTALL_DIR"
-  sudo chown "$USER":"$USER" "$INSTALL_DIR"
-  git clone https://github.com/ali934h/tg-filehost.git "$INSTALL_DIR"
-  cd "$INSTALL_DIR"
-fi
+sudo mkdir -p "$INSTALL_DIR"
+sudo chown "$USER":"$USER" "$INSTALL_DIR"
+git clone https://github.com/ali934h/tg-filehost.git "$INSTALL_DIR"
+cd "$INSTALL_DIR"
 
 mkdir -p "$UPLOAD_DIR" "$INSTALL_DIR/logs"
 echo -e "  ${GREEN}✓ Project files ready.${NC}"
@@ -273,23 +308,6 @@ echo -e "  ${GREEN}✓ Packages installed.${NC}"
 
 echo -e "\n${GREEN}${BOLD}[5/6] Configuring Nginx...${NC}"
 
-# Remove old sites-enabled symlink if exists (from previous installs)
-if [[ -L /etc/nginx/sites-enabled/tg-filehost ]]; then
-  sudo rm /etc/nginx/sites-enabled/tg-filehost
-  echo -e "  ${YELLOW}Removed old sites-enabled symlink.${NC}"
-fi
-if [[ -f /etc/nginx/sites-available/tg-filehost ]]; then
-  sudo rm /etc/nginx/sites-available/tg-filehost
-  echo -e "  ${YELLOW}Removed old sites-available config.${NC}"
-fi
-
-# Backup existing conf.d config if present
-if [[ -f "$NGINX_CONF" ]]; then
-  BACKUP_PATH="${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
-  sudo cp "$NGINX_CONF" "$BACKUP_PATH"
-  echo -e "  ${YELLOW}Existing nginx config backed up to: ${BACKUP_PATH}${NC}"
-fi
-
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 443 ssl;
@@ -322,12 +340,7 @@ echo -e "  ${CYAN}Testing nginx configuration...${NC}"
 if ! sudo nginx -t 2>&1; then
   echo -e "\n  ${RED}✗ Nginx configuration test FAILED.${NC}"
   echo -e "  ${RED}  Aborting installation to prevent breaking other services.${NC}"
-  if [[ -n "${BACKUP_PATH:-}" ]]; then
-    sudo cp "$BACKUP_PATH" "$NGINX_CONF"
-    echo -e "  ${YELLOW}  Restored previous nginx config from backup.${NC}"
-  else
-    sudo rm -f "$NGINX_CONF"
-  fi
+  sudo rm -f "$NGINX_CONF"
   exit 1
 fi
 
@@ -351,7 +364,6 @@ node src/login.js
 # ------------------------------
 
 echo -e "\n${GREEN}${BOLD}Starting application with PM2...${NC}"
-pm2 delete tg-filehost 2>/dev/null || true
 pm2 start ecosystem.config.js
 pm2 save
 sudo pm2 startup systemd -u "$USER" --hp "$HOME" | tail -1 | sudo bash
