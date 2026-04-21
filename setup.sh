@@ -129,8 +129,10 @@ prompt_required ALLOWED_USERS "Allowed Telegram user IDs (comma-separated)"
 echo ""
 
 echo -e "${BOLD}── Domain Setup ──────────────────────────────────${NC}"
-prompt_required DOMAIN        "Main domain (e.g. yourdomain.com)"
-prompt_default  FILES_SUBDOMAIN "Files subdomain" "files"
+echo -e "  ${YELLOW}Enter the full domain or subdomain that points to this server.${NC}"
+echo -e "  ${YELLOW}Example: tg-filehost.example.com  or  files.example.com${NC}"
+echo ""
+prompt_required HOST "Host (e.g. tg-filehost.example.com)"
 echo ""
 
 echo -e "${BOLD}── SSL Certificates ──────────────────────────────${NC}"
@@ -142,13 +144,13 @@ SSL_DIR=$(dirname "$SSL_CERT")
 echo ""
 
 echo -e "${BOLD}── Server Config ─────────────────────────────────${NC}"
-prompt_default UPLOAD_DIR "Upload directory" "/var/www/tg-filehost/uploads"
+prompt_default UPLOAD_DIR "Upload directory" "/root/tg-filehost-downloads"
 echo -e "  ${YELLOW}Note: Port 80/443 are handled by nginx. Choose an internal port for Node.js.${NC}"
 echo -e "  ${YELLOW}Avoid: 1080, 2053, 2083, 8080 (used by 3x-ui / common proxies)${NC}"
 prompt_port PORT "3000"
 echo ""
 
-INSTALL_DIR="/var/www/tg-filehost"
+INSTALL_DIR="/root/tg-filehost"
 NGINX_CONF="/etc/nginx/conf.d/tg-filehost.conf"
 
 # ------------------------------
@@ -158,8 +160,8 @@ NGINX_CONF="/etc/nginx/conf.d/tg-filehost.conf"
 echo -e "${BOLD}${YELLOW}┌─────────────────────────────────────────────────┐${NC}"
 echo -e "${BOLD}${YELLOW}│           Configuration Summary                 │${NC}"
 echo -e "${BOLD}${YELLOW}└─────────────────────────────────────────────────┘${NC}"
-echo -e "  Domain        : ${DOMAIN}"
-echo -e "  Files URL     : https://${FILES_SUBDOMAIN}.${DOMAIN}/files/"
+echo -e "  Host          : ${HOST}"
+echo -e "  Files URL     : https://${HOST}/files/"
 echo -e "  SSL Cert      : ${SSL_CERT}"
 echo -e "  SSL Key       : ${SSL_KEY}"
 echo -e "  Upload dir    : ${UPLOAD_DIR}"
@@ -185,13 +187,11 @@ done
 
 echo -e "\n${GREEN}${BOLD}[0/6] Cleaning up previous installation...${NC}"
 
-# Stop and remove PM2 process
 if command -v pm2 &>/dev/null; then
   pm2 delete tg-filehost 2>/dev/null && echo -e "  ${YELLOW}PM2 process removed.${NC}" || true
   pm2 save --force 2>/dev/null || true
 fi
 
-# Remove nginx config (with backup if exists)
 if [[ -f "$NGINX_CONF" ]]; then
   BACKUP_PATH="${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
   sudo cp "$NGINX_CONF" "$BACKUP_PATH"
@@ -199,7 +199,6 @@ if [[ -f "$NGINX_CONF" ]]; then
   echo -e "  ${YELLOW}Nginx config backed up to: ${BACKUP_PATH} and removed.${NC}"
 fi
 
-# Remove old sites-enabled symlink (legacy)
 if [[ -L /etc/nginx/sites-enabled/tg-filehost ]]; then
   sudo rm /etc/nginx/sites-enabled/tg-filehost
   echo -e "  ${YELLOW}Removed old sites-enabled symlink.${NC}"
@@ -209,7 +208,6 @@ if [[ -f /etc/nginx/sites-available/tg-filehost ]]; then
   echo -e "  ${YELLOW}Removed old sites-available config.${NC}"
 fi
 
-# Remove previous project directory entirely
 if [[ -d "$INSTALL_DIR" ]]; then
   sudo rm -rf "$INSTALL_DIR"
   echo -e "  ${YELLOW}Removed old install directory: ${INSTALL_DIR}${NC}"
@@ -256,8 +254,7 @@ fi
 
 echo -e "\n${GREEN}${BOLD}[2/6] Setting up project files...${NC}"
 
-sudo mkdir -p "$INSTALL_DIR"
-sudo chown "$USER":"$USER" "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
 git clone https://github.com/ali934h/tg-filehost.git "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
@@ -282,8 +279,8 @@ PHONE=${PHONE}
 SESSION=
 ALLOWED_USERS=${ALLOWED_USERS}
 ALLOWED_CHATS=
-DOMAIN=${DOMAIN}
-FILES_SUBDOMAIN=${FILES_SUBDOMAIN}
+# Full host (domain or subdomain) — used to build file URLs
+HOST=${HOST}
 # Internal port — Node.js listens on 127.0.0.1 only. nginx proxies 443 → this port.
 PORT=${PORT}
 UPLOAD_DIR=${UPLOAD_DIR}
@@ -311,7 +308,7 @@ echo -e "\n${GREEN}${BOLD}[5/6] Configuring Nginx...${NC}"
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 443 ssl;
-    server_name ${FILES_SUBDOMAIN}.${DOMAIN};
+    server_name ${HOST};
 
     ssl_certificate     ${SSL_DIR}/fullchain.pem;
     ssl_certificate_key ${SSL_KEY};
@@ -366,7 +363,13 @@ node src/login.js
 echo -e "\n${GREEN}${BOLD}Starting application with PM2...${NC}"
 pm2 start ecosystem.config.js
 pm2 save
-sudo pm2 startup systemd -u "$USER" --hp "$HOME" | tail -1 | sudo bash
+
+# Fix: extract only the sudo command from pm2 startup output
+STARTUP_CMD=$(pm2 startup systemd -u "$USER" --hp "$HOME" 2>/dev/null | grep -E '^sudo ')
+if [[ -n "$STARTUP_CMD" ]]; then
+  eval "$STARTUP_CMD"
+fi
+
 echo -e "  ${GREEN}✓ PM2 started and saved.${NC}"
 
 # ------------------------------
@@ -377,10 +380,11 @@ echo ""
 echo -e "${GREEN}${BOLD}┌─────────────────────────────────────────────────┐${NC}"
 echo -e "${GREEN}${BOLD}│       tg-filehost installed successfully! ✓     │${NC}"
 echo -e "${GREEN}${BOLD}└─────────────────────────────────────────────────┘${NC}"
-echo -e "  Files URL  : https://${FILES_SUBDOMAIN}.${DOMAIN}/files/"
-echo -e "  Health     : https://${FILES_SUBDOMAIN}.${DOMAIN}/health"
+echo -e "  Files URL  : https://${HOST}/files/"
+echo -e "  Health     : https://${HOST}/health"
 echo -e "  Node.js    : 127.0.0.1:${PORT} (internal)"
 echo -e "  Nginx conf : ${NGINX_CONF}"
+echo -e "  Install dir: ${INSTALL_DIR}"
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
 echo -e "  pm2 status"
