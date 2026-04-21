@@ -69,6 +69,54 @@ prompt_default() {
   eval "$var_name='${value:-$default}'"
 }
 
+# Ports that are commonly used by other services (e.g. 3x-ui, proxies, etc.)
+BLOCKED_PORTS=(80 443 1080 2053 2083 2087 2096 3128 8080 8443 8880)
+
+is_blocked_port() {
+  local p="$1"
+  for bp in "${BLOCKED_PORTS[@]}"; do
+    [[ "$p" == "$bp" ]] && return 0
+  done
+  return 1
+}
+
+is_port_in_use() {
+  ss -tlnp 2>/dev/null | grep -q ":$1 " || \
+  netstat -tlnp 2>/dev/null | grep -q ":$1 "
+}
+
+prompt_port() {
+  local var_name="$1"
+  local default="$2"
+  local port
+
+  while true; do
+    read -rp "$(echo -e ${CYAN}"Internal Node.js port [default: ${default}]: "${NC})" port
+    port="${port:-$default}"
+
+    if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1024 || port > 65535 )); then
+      echo -e "  ${RED}✗ Invalid port. Choose a number between 1024 and 65535.${NC}"
+      continue
+    fi
+
+    if is_blocked_port "$port"; then
+      echo -e "  ${RED}✗ Port ${port} is reserved for common services (nginx, 3x-ui, proxies).${NC}"
+      echo -e "  ${YELLOW}  Please choose a different port.${NC}"
+      continue
+    fi
+
+    if is_port_in_use "$port"; then
+      echo -e "  ${RED}✗ Port ${port} is already in use on this server.${NC}"
+      echo -e "  ${YELLOW}  Please choose a different port.${NC}"
+      continue
+    fi
+
+    eval "$var_name='$port'"
+    echo -e "  ${GREEN}✓ Port ${port} is available.${NC}"
+    break
+  done
+}
+
 # ------------------------------
 # Collect user input
 # ------------------------------
@@ -95,10 +143,13 @@ echo ""
 
 echo -e "${BOLD}── Server Config ─────────────────────────────────${NC}"
 prompt_default UPLOAD_DIR "Upload directory" "/var/www/tg-filehost/uploads"
-prompt_default PORT        "Express port"     "3000"
+echo -e "  ${YELLOW}Note: Port 80/443 are handled by nginx. Choose an internal port for Node.js.${NC}"
+echo -e "  ${YELLOW}Avoid: 1080, 2053, 2083, 8080 (used by 3x-ui / common proxies)${NC}"
+prompt_port PORT "3000"
 echo ""
 
 INSTALL_DIR="/var/www/tg-filehost"
+NGINX_CONF="/etc/nginx/conf.d/tg-filehost.conf"
 
 # ------------------------------
 # Summary
@@ -112,7 +163,8 @@ echo -e "  Files URL     : https://${FILES_SUBDOMAIN}.${DOMAIN}/files/"
 echo -e "  SSL Cert      : ${SSL_CERT}"
 echo -e "  SSL Key       : ${SSL_KEY}"
 echo -e "  Upload dir    : ${UPLOAD_DIR}"
-echo -e "  Express port  : ${PORT}"
+echo -e "  Node.js port  : 127.0.0.1:${PORT} (internal only)"
+echo -e "  Nginx config  : ${NGINX_CONF}"
 echo -e "  Install dir   : ${INSTALL_DIR}"
 echo ""
 
@@ -151,7 +203,9 @@ fi
 if ! command -v nginx &>/dev/null; then
   echo -e "  ${YELLOW}Nginx not found. Installing...${NC}"
   sudo apt-get install -y nginx &>/dev/null
-  echo -e "  ${GREEN}✓ Nginx installed.${NC}"
+  sudo systemctl enable nginx &>/dev/null
+  sudo systemctl start nginx &>/dev/null
+  echo -e "  ${GREEN}✓ Nginx installed and started.${NC}"
 else
   echo -e "  ${GREEN}✓ Nginx found.${NC}"
 fi
@@ -195,6 +249,7 @@ ALLOWED_USERS=${ALLOWED_USERS}
 ALLOWED_CHATS=
 DOMAIN=${DOMAIN}
 FILES_SUBDOMAIN=${FILES_SUBDOMAIN}
+# Internal port — Node.js listens on 127.0.0.1 only. nginx proxies 443 → this port.
 PORT=${PORT}
 UPLOAD_DIR=${UPLOAD_DIR}
 SSL_CERT=${SSL_CERT}
@@ -218,7 +273,24 @@ echo -e "  ${GREEN}✓ Packages installed.${NC}"
 
 echo -e "\n${GREEN}${BOLD}[5/6] Configuring Nginx...${NC}"
 
-sudo tee /etc/nginx/sites-available/tg-filehost > /dev/null <<EOF
+# Remove old sites-enabled symlink if exists (from previous installs)
+if [[ -L /etc/nginx/sites-enabled/tg-filehost ]]; then
+  sudo rm /etc/nginx/sites-enabled/tg-filehost
+  echo -e "  ${YELLOW}Removed old sites-enabled symlink.${NC}"
+fi
+if [[ -f /etc/nginx/sites-available/tg-filehost ]]; then
+  sudo rm /etc/nginx/sites-available/tg-filehost
+  echo -e "  ${YELLOW}Removed old sites-available config.${NC}"
+fi
+
+# Backup existing conf.d config if present
+if [[ -f "$NGINX_CONF" ]]; then
+  BACKUP_PATH="${NGINX_CONF}.bak.$(date +%Y%m%d%H%M%S)"
+  sudo cp "$NGINX_CONF" "$BACKUP_PATH"
+  echo -e "  ${YELLOW}Existing nginx config backed up to: ${BACKUP_PATH}${NC}"
+fi
+
+sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 443 ssl;
     server_name ${FILES_SUBDOMAIN}.${DOMAIN};
@@ -236,6 +308,8 @@ server {
 
     location /health {
         proxy_pass http://127.0.0.1:${PORT};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
     }
 
     location / {
@@ -244,8 +318,20 @@ server {
 }
 EOF
 
-sudo ln -sf /etc/nginx/sites-available/tg-filehost /etc/nginx/sites-enabled/tg-filehost
-sudo nginx -t && sudo systemctl reload nginx
+echo -e "  ${CYAN}Testing nginx configuration...${NC}"
+if ! sudo nginx -t 2>&1; then
+  echo -e "\n  ${RED}✗ Nginx configuration test FAILED.${NC}"
+  echo -e "  ${RED}  Aborting installation to prevent breaking other services.${NC}"
+  if [[ -n "${BACKUP_PATH:-}" ]]; then
+    sudo cp "$BACKUP_PATH" "$NGINX_CONF"
+    echo -e "  ${YELLOW}  Restored previous nginx config from backup.${NC}"
+  else
+    sudo rm -f "$NGINX_CONF"
+  fi
+  exit 1
+fi
+
+sudo systemctl reload nginx
 echo -e "  ${GREEN}✓ Nginx configured and reloaded.${NC}"
 
 # ------------------------------
@@ -281,6 +367,8 @@ echo -e "${GREEN}${BOLD}│       tg-filehost installed successfully! ✓     �
 echo -e "${GREEN}${BOLD}└─────────────────────────────────────────────────┘${NC}"
 echo -e "  Files URL  : https://${FILES_SUBDOMAIN}.${DOMAIN}/files/"
 echo -e "  Health     : https://${FILES_SUBDOMAIN}.${DOMAIN}/health"
+echo -e "  Node.js    : 127.0.0.1:${PORT} (internal)"
+echo -e "  Nginx conf : ${NGINX_CONF}"
 echo ""
 echo -e "  ${BOLD}Useful commands:${NC}"
 echo -e "  pm2 status"
