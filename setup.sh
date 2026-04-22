@@ -238,6 +238,14 @@ else
   echo -e "  ${GREEN}✓ PM2 $(pm2 -v) found.${NC}"
 fi
 
+if ! pm2 list 2>/dev/null | grep -q pm2-logrotate; then
+  echo -e "  ${YELLOW}Installing pm2-logrotate...${NC}"
+  pm2 install pm2-logrotate &>/dev/null
+  echo -e "  ${GREEN}✓ pm2-logrotate installed.${NC}"
+else
+  echo -e "  ${GREEN}✓ pm2-logrotate already installed.${NC}"
+fi
+
 if ! command -v nginx &>/dev/null; then
   echo -e "  ${YELLOW}Nginx not found. Installing...${NC}"
   sudo apt-get install -y nginx &>/dev/null
@@ -295,7 +303,8 @@ SSL_KEY=${SSL_KEY}
 SSL_FULLCHAIN=${SSL_DIR}/fullchain.pem
 EOF
 
-echo -e "  ${GREEN}✓ .env written.${NC}"
+chmod 600 "$INSTALL_DIR/.env"
+echo -e "  ${GREEN}✓ .env written (chmod 600).${NC}"
 
 # ------------------------------
 # [4/6] npm install
