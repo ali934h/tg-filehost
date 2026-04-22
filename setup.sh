@@ -259,6 +259,12 @@ git clone https://github.com/ali934h/tg-filehost.git "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
 mkdir -p "$UPLOAD_DIR" "$INSTALL_DIR/logs"
+
+# Allow nginx (www-data) to read files under /root and UPLOAD_DIR
+chmod 755 /root
+chmod -R 755 "$UPLOAD_DIR"
+echo -e "  ${GREEN}✓ Directory permissions set (nginx can serve files).${NC}"
+
 echo -e "  ${GREEN}✓ Project files ready.${NC}"
 
 echo -e "  Building SSL fullchain..."
