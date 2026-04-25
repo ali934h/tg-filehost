@@ -1,36 +1,34 @@
-const express = require('express');
-const path = require('path');
+"use strict";
 
-const app = express();
+const express = require("express");
+const cfg = require("./config");
+const logger = require("./logger");
 
-const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
-const PORT = process.env.PORT || 3000;
+function buildApp() {
+  const app = express();
+  app.disable("x-powered-by");
 
-app.use(express.json());
+  app.get("/health", (req, res) => {
+    res.json({ status: "ok", uptime: process.uptime() });
+  });
 
-// Serve uploaded files
-app.use('/files', express.static(UPLOAD_DIR, {
-  dotfiles: 'deny',
-  index: false
-}));
+  // 404 for everything else. File serving is handled by nginx via the
+  // /files/ alias on the upload directory; the app does not serve files.
+  app.use((req, res) => {
+    res.status(404).json({ error: "Not found" });
+  });
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime() });
-});
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
+  return app;
+}
 
 function startServer() {
+  const app = buildApp();
   return new Promise((resolve) => {
-    const server = app.listen(PORT, '127.0.0.1', () => {
-      console.log(`[Server] Running on 127.0.0.1:${PORT}`);
+    const server = app.listen(cfg.port, "127.0.0.1", () => {
+      logger.info(`HTTP server listening on 127.0.0.1:${cfg.port}`);
       resolve(server);
     });
   });
 }
 
-module.exports = { app, startServer };
+module.exports = { buildApp, startServer };

@@ -1,4 +1,7 @@
 node_modules/
 .env
+*.session
 uploads/
+logs/
 *.log
+package-lock.json
