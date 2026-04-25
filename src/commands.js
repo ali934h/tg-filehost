@@ -114,6 +114,14 @@ function getMediaSize(msg) {
   return 0;
 }
 
+// Returns true only for media types we can actually stream to disk.
+// Skips link previews (MessageMediaWebPage), polls, contacts, geo, etc.
+function isDownloadableMedia(media) {
+  if (!media) return false;
+  const cn = media.className;
+  return cn === "MessageMediaDocument" || cn === "MessageMediaPhoto";
+}
+
 async function handleHelp(msg) {
   await sendReply(msg, HELP_TEXT);
 }
@@ -242,7 +250,7 @@ async function handleMessage(event) {
   if (text === "/files") return handleFiles(msg);
   if (text.startsWith("/del_")) return handleDelete(msg, text);
   if (text === "/deleteall") return handleDeleteAll(msg);
-  if (msg.media) return handleUpload(msg);
+  if (isDownloadableMedia(msg.media)) return handleUpload(msg);
 }
 
 module.exports = { handleMessage };
