@@ -1,105 +1,150 @@
-const fs = require('fs-extra');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+"use strict";
 
-const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
-const FILES_SUBDOMAIN = process.env.FILES_SUBDOMAIN || 'files';
-const DOMAIN = process.env.DOMAIN;
-const META_FILE = path.join(UPLOAD_DIR, '.meta.json');
+const fs = require("fs-extra");
+const path = require("path");
+const { v4: uuidv4 } = require("uuid");
+const cfg = require("./config");
+const logger = require("./logger");
 
-async function ensureUploadDir() {
-  await fs.ensureDir(UPLOAD_DIR);
-  if (!(await fs.pathExists(META_FILE))) await fs.writeJson(META_FILE, []);
+const META_FILE = path.join(cfg.uploadDir, ".meta.json");
+const TMP_DIR = path.join(cfg.uploadDir, ".tmp");
+
+let metaQueue = Promise.resolve();
+
+async function ensureDirs() {
+  await fs.ensureDir(cfg.uploadDir);
+  await fs.ensureDir(TMP_DIR);
+  if (!(await fs.pathExists(META_FILE))) {
+    await fs.writeJson(META_FILE, []);
+  }
 }
 
 async function readMeta() {
-  await ensureUploadDir();
-  return await fs.readJson(META_FILE);
+  await ensureDirs();
+  try {
+    return await fs.readJson(META_FILE);
+  } catch (err) {
+    logger.error("Failed to read meta, resetting:", err.message);
+    await fs.writeJson(META_FILE, []);
+    return [];
+  }
 }
 
-async function writeMeta(data) {
-  await fs.writeJson(META_FILE, data, { spaces: 2 });
+// Serialize all meta writes through a single promise chain to avoid
+// read-modify-write races when multiple uploads finish concurrently.
+function withMetaLock(fn) {
+  metaQueue = metaQueue.then(fn, fn);
+  return metaQueue;
 }
 
 async function appendMeta(entry) {
-  const meta = await readMeta();
-  meta.push(entry);
-  await writeMeta(meta);
-  return entry;
-}
-
-/**
- * Stream file directly to disk using GramJS iterDownload.
- * Uses 1MB chunks for better throughput on large files.
- */
-async function saveFileStream(client, msg, originalName, mimeType) {
-  await ensureUploadDir();
-  const ext = path.extname(originalName) || '';
-  const uuid = uuidv4();
-  const fileName = `${uuid}${ext}`;
-  const filePath = path.join(UPLOAD_DIR, fileName);
-
-  const writeStream = fs.createWriteStream(filePath);
-
-  for await (const chunk of client.iterDownload({
-    file: msg.media,
-    requestSize: 1024 * 1024, // 1MB per chunk for better throughput
-  })) {
-    if (!writeStream.write(chunk)) {
-      // Backpressure: wait for drain
-      await new Promise(resolve => writeStream.once('drain', resolve));
-    }
-  }
-
-  await new Promise((resolve, reject) => {
-    writeStream.end();
-    writeStream.on('finish', resolve);
-    writeStream.on('error', reject);
+  return withMetaLock(async () => {
+    const meta = await readMeta();
+    meta.push(entry);
+    await fs.writeJson(META_FILE, meta, { spaces: 2 });
+    return entry;
   });
-
-  return { uuid, filePath, ext };
 }
 
-async function saveFile(buffer, originalName, mimeType, size) {
-  await ensureUploadDir();
-  const ext = path.extname(originalName) || '';
-  const uuid = uuidv4();
-  const fileName = `${uuid}${ext}`;
-  const filePath = path.join(UPLOAD_DIR, fileName);
-  await fs.outputFile(filePath, buffer);
-  const entry = {
-    id: uuid,
-    originalName,
-    fileName,
-    mimeType,
-    size,
-    uploadedAt: new Date().toISOString(),
-    url: `https://${FILES_SUBDOMAIN}.${DOMAIN}/files/${fileName}`
-  };
-  await appendMeta(entry);
-  return entry;
+async function removeMeta(id) {
+  return withMetaLock(async () => {
+    const meta = await readMeta();
+    const idx = meta.findIndex((f) => f.id === id);
+    if (idx === -1) return null;
+    const [removed] = meta.splice(idx, 1);
+    await fs.writeJson(META_FILE, meta, { spaces: 2 });
+    return removed;
+  });
 }
 
-async function listFiles() { return await readMeta(); }
+async function clearMeta() {
+  return withMetaLock(async () => {
+    const meta = await readMeta();
+    await fs.writeJson(META_FILE, [], { spaces: 2 });
+    return meta;
+  });
+}
+
+async function listFiles() {
+  return readMeta();
+}
+
+async function findById(id) {
+  const meta = await readMeta();
+  return meta.find((f) => f.id === id) || null;
+}
+
+async function findByShortId(shortId) {
+  const meta = await readMeta();
+  const matches = meta.filter((f) => f.id.startsWith(shortId));
+  if (matches.length === 0) return { match: null, ambiguous: false };
+  if (matches.length > 1) return { match: null, ambiguous: true, matches };
+  return { match: matches[0], ambiguous: false };
+}
 
 async function deleteFile(id) {
-  const meta = await readMeta();
-  const index = meta.findIndex(f => f.id === id);
-  if (index === -1) return false;
-  await fs.remove(path.join(UPLOAD_DIR, meta[index].fileName));
-  meta.splice(index, 1);
-  await writeMeta(meta);
+  const removed = await removeMeta(id);
+  if (!removed) return false;
+  try {
+    await fs.remove(path.join(cfg.uploadDir, removed.fileName));
+  } catch (err) {
+    logger.warn(`Failed to remove file ${removed.fileName}:`, err.message);
+  }
   return true;
 }
 
 async function deleteAllFiles() {
-  const meta = await readMeta();
-  for (const entry of meta) await fs.remove(path.join(UPLOAD_DIR, entry.fileName));
-  await writeMeta([]);
-  return meta.length;
+  const removed = await clearMeta();
+  for (const entry of removed) {
+    try {
+      await fs.remove(path.join(cfg.uploadDir, entry.fileName));
+    } catch (err) {
+      logger.warn(`Failed to remove file ${entry.fileName}:`, err.message);
+    }
+  }
+  return removed.length;
+}
+
+/**
+ * Stream a Telegram document/photo to disk via gramJS iterDownload.
+ * Writes to a .tmp partial first, renames on success, deletes on error.
+ */
+async function saveFileStream(client, msg, originalName) {
+  await ensureDirs();
+  const ext = path.extname(originalName) || "";
+  const id = uuidv4();
+  const fileName = `${id}${ext}`;
+  const tmpPath = path.join(TMP_DIR, fileName);
+  const finalPath = path.join(cfg.uploadDir, fileName);
+
+  const writeStream = fs.createWriteStream(tmpPath);
+
+  try {
+    for await (const chunk of client.iterDownload({
+      file: msg.media,
+      requestSize: 1024 * 1024,
+    })) {
+      if (!writeStream.write(chunk)) {
+        await new Promise((resolve) => writeStream.once("drain", resolve));
+      }
+    }
+    await new Promise((resolve, reject) => {
+      writeStream.end();
+      writeStream.on("finish", resolve);
+      writeStream.on("error", reject);
+    });
+    await fs.move(tmpPath, finalPath, { overwrite: true });
+  } catch (err) {
+    try { writeStream.destroy(); } catch (_) {}
+    try { await fs.remove(tmpPath); } catch (_) {}
+    throw err;
+  }
+
+  return { id, fileName, filePath: finalPath };
 }
 
 function formatSize(bytes) {
+  if (!Number.isFinite(bytes)) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -109,7 +154,18 @@ function formatSize(bytes) {
 async function getTotalStorage() {
   const meta = await readMeta();
   const total = meta.reduce((sum, f) => sum + (f.size || 0), 0);
-  return { count: meta.length, total: formatSize(total) };
+  return { count: meta.length, totalBytes: total, total: formatSize(total) };
 }
 
-module.exports = { saveFile, saveFileStream, appendMeta, listFiles, deleteFile, deleteAllFiles, getTotalStorage, formatSize };
+module.exports = {
+  ensureDirs,
+  saveFileStream,
+  appendMeta,
+  listFiles,
+  findById,
+  findByShortId,
+  deleteFile,
+  deleteAllFiles,
+  getTotalStorage,
+  formatSize,
+};
