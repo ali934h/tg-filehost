@@ -8,6 +8,7 @@ REPO_URL="https://github.com/ali934h/tg-filehost.git"
 PROJECT="tg-filehost"
 INSTALL_DIR="/root/${PROJECT}"
 DEFAULT_UPLOAD_DIR="/var/lib/${PROJECT}/files"
+DEFAULT_TEMP_DIR="/var/lib/${PROJECT}/temp"
 NODE_MAJOR=20
 
 RED='\033[0;31m'
@@ -36,7 +37,8 @@ banner() {
   echo -e "${BOLD}${CYAN}========================================${NC}"
   echo -e "${BOLD}${CYAN}          tg-filehost installer         ${NC}"
   echo -e "${BOLD}${CYAN}========================================${NC}"
-  echo -e "${BOLD} Telegram userbot that turns files into direct download links${NC}"
+  echo -e "${BOLD} Telegram bot: send a file → get a direct link.${NC}"
+  echo -e "${BOLD}             : send a direct URL → get back the file.${NC}"
   echo -e "${BOLD} Repo:${NC}        ${REPO_URL}"
   echo -e "${BOLD} Install dir:${NC} ${INSTALL_DIR}"
   echo
@@ -142,7 +144,7 @@ prompt_numeric() {
       read -r -p "$(echo -e "${prompt}: ")" value
     fi
     if [[ ! "${value}" =~ ^[0-9]+$ ]]; then
-      err "Must be a positive integer. Please try again."
+      err "Must be a non-negative integer. Please try again."
       continue
     fi
     echo "${value}"
@@ -161,6 +163,30 @@ prompt_file() {
     fi
     if [[ ! -f "${value}" ]]; then
       err "File not found: ${value}"
+      continue
+    fi
+    echo "${value}"
+    return
+  done
+}
+
+prompt_user_ids_with_optional_empty() {
+  local prompt="$1"
+  local value=""
+  while true; do
+    read -r -p "$(echo -e "${prompt}: ")" value
+    value="${value// /}"
+    if [[ -z "${value}" ]]; then
+      warn "ALLOWED_USERS is empty — this means the bot will be open to ANY Telegram user."
+      local confirm=""
+      read -r -p "$(echo -e "${YELLOW}Are you sure? [y/n]: ${NC}")" confirm
+      case "${confirm,,}" in
+        y|yes) echo ""; return ;;
+        *)     err "Please enter at least one Telegram user id."; continue ;;
+      esac
+    fi
+    if [[ ! "${value}" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+      err "Format must be comma-separated user ids, e.g. 123456789,987654321"
       continue
     fi
     echo "${value}"
@@ -211,21 +237,18 @@ collect_inputs() {
   step "Collecting Telegram configuration"
   echo -e "${YELLOW}All inputs are shown in plain text so you can verify what you typed.${NC}\n"
 
-  echo -e "${BOLD}Telegram API credentials${NC} (https://my.telegram.org/apps)"
-  API_ID=$(prompt_numeric "API_ID")
-  API_HASH=$(prompt_nonempty "API_HASH")
-  PHONE=$(prompt_nonempty "Phone number (e.g. +989123456789)")
+  echo -e "${BOLD}Bot token${NC} (from @BotFather)"
+  BOT_TOKEN=$(prompt_nonempty "BOT_TOKEN")
+
+  echo -e "\n${BOLD}Telegram client app credentials${NC} (https://my.telegram.org/apps)"
+  TG_API_ID=$(prompt_numeric "TG_API_ID")
+  TG_API_HASH=$(prompt_nonempty "TG_API_HASH")
 
   echo
   echo -e "${BOLD}Allowed users${NC}"
   echo -e "${CYAN}Comma-separated Telegram numeric user IDs that may use the bot.${NC}"
-  echo -e "${CYAN}If you also set ALLOWED_CHATS below, the chat list takes precedence.${NC}"
-  ALLOWED_USERS=$(prompt_nonempty "ALLOWED_USERS")
-
-  echo
-  echo -e "${BOLD}Allowed chats (optional)${NC}"
-  echo -e "${CYAN}Comma-separated chat/channel IDs (e.g. -100123456789). Leave empty to skip.${NC}"
-  ALLOWED_CHATS=$(prompt_optional "ALLOWED_CHATS")
+  echo -e "${CYAN}Tip: send /start to @userinfobot to find your numeric user id.${NC}"
+  ALLOWED_USERS=$(prompt_user_ids_with_optional_empty "ALLOWED_USERS")
 
   step "Collecting domain & SSL"
   echo -e "${BOLD}Host${NC} (e.g. files.example.com — must already point at this server)"
@@ -242,27 +265,38 @@ collect_inputs() {
   SSL_DIR=$(dirname "${SSL_CERT}")
 
   step "Storage"
-  echo -e "${BOLD}Upload directory${NC} (where files are stored on disk)"
+  echo -e "${BOLD}Upload directory${NC} (where hosted files live on disk and are served by nginx)"
   echo -e "${CYAN}Default lives outside /root so nginx (www-data) can serve it without${NC}"
   echo -e "${CYAN}loosening permissions on your home directory.${NC}"
   UPLOAD_DIR=$(prompt_nonempty "UPLOAD_DIR" "${DEFAULT_UPLOAD_DIR}")
 
-  MAX_FILE_MB=$(prompt_numeric "Maximum allowed file size in MB" "2048")
+  echo -e "\n${BOLD}Temp directory${NC} (used while downloading files from URLs before sending to chat)"
+  TEMP_DIR=$(prompt_nonempty "TEMP_DIR" "${DEFAULT_TEMP_DIR}")
+
+  MAX_FILE_MB=$(prompt_numeric "Max file size accepted from Telegram (MB)" "2048")
+  MAX_DOWNLOAD_MB=$(prompt_numeric "Max file size accepted from URL downloads (MB)" "2048")
+
+  echo
+  echo -e "${BOLD}Retention${NC} (auto-delete hosted files after N days)"
+  echo -e "${CYAN}Enter 0 to keep files forever.${NC}"
+  RETENTION_DAYS=$(prompt_numeric "RETENTION_DAYS" "0")
 }
 
 confirm_inputs() {
   step "Configuration summary"
   cat <<EOF
-  Host          : ${HOST}
-  Files URL     : https://${HOST}/files/
-  Internal port : ${APP_PORT}
-  SSL cert      : ${SSL_CERT}
-  SSL key       : ${SSL_KEY}
-  Install dir   : ${INSTALL_DIR}
-  Upload dir    : ${UPLOAD_DIR}
-  Max file size : ${MAX_FILE_MB} MB
-  Allowed users : ${ALLOWED_USERS}
-  Allowed chats : ${ALLOWED_CHATS:-<none>}
+  Host           : ${HOST}
+  Files URL      : https://${HOST}/files/
+  Internal port  : ${APP_PORT}
+  SSL cert       : ${SSL_CERT}
+  SSL key        : ${SSL_KEY}
+  Install dir    : ${INSTALL_DIR}
+  Upload dir     : ${UPLOAD_DIR}
+  Temp dir       : ${TEMP_DIR}
+  Max upload     : ${MAX_FILE_MB} MB (Telegram → link)
+  Max URL fetch  : ${MAX_DOWNLOAD_MB} MB (URL → Telegram)
+  Retention      : ${RETENTION_DAYS} day(s) ($([[ "${RETENTION_DAYS}" == "0" ]] && echo 'keep forever' || echo "delete after ${RETENTION_DAYS}d"))
+  Allowed users  : ${ALLOWED_USERS:-<none — open to all>}
 EOF
   echo
   while true; do
@@ -279,17 +313,20 @@ write_env() {
   step "Writing .env"
 
   cat >"${INSTALL_DIR}/.env" <<EOF
-API_ID=${API_ID}
-API_HASH=${API_HASH}
-PHONE=${PHONE}
-SESSION=
+BOT_TOKEN=${BOT_TOKEN}
+TG_API_ID=${TG_API_ID}
+TG_API_HASH=${TG_API_HASH}
+TG_SESSION_FILE=${INSTALL_DIR}/telegram.session
 ALLOWED_USERS=${ALLOWED_USERS}
-ALLOWED_CHATS=${ALLOWED_CHATS}
 HOST=${HOST}
 PORT=${APP_PORT}
 UPLOAD_DIR=${UPLOAD_DIR}
+TEMP_DIR=${TEMP_DIR}
 MAX_FILE_MB=${MAX_FILE_MB}
+MAX_DOWNLOAD_MB=${MAX_DOWNLOAD_MB}
+RETENTION_DAYS=${RETENTION_DAYS}
 LOG_LEVEL=info
+NODE_ENV=production
 EOF
 
   chmod 600 "${INSTALL_DIR}/.env"
@@ -302,21 +339,19 @@ install_npm_deps() {
   ok "Packages installed"
 }
 
-prepare_upload_dir() {
-  step "Preparing upload directory"
-  mkdir -p "${UPLOAD_DIR}"
-  # Ensure nginx (www-data) can read the files. We do NOT touch /root —
-  # the default UPLOAD_DIR lives under /var/lib so this is unnecessary.
-  # If the user picked a path under /root, warn them and add traversal.
-  chmod 755 "${UPLOAD_DIR}"
+prepare_runtime_dirs() {
+  step "Preparing storage directories"
+  mkdir -p "${UPLOAD_DIR}" "${TEMP_DIR}"
+  chmod 755 "${UPLOAD_DIR}" "${TEMP_DIR}"
   case "${UPLOAD_DIR}" in
     /root*)
       warn "UPLOAD_DIR is under /root. Adding traversal permission (chmod o+x /root)."
-      warn "This is less safe than using /var/lib/${PROJECT}/files; consider moving it."
+      warn "Using /var/lib/${PROJECT}/files is recommended; consider moving it."
       chmod o+x /root
       ;;
   esac
-  ok "Upload directory ready: ${UPLOAD_DIR}"
+  ok "Upload dir : ${UPLOAD_DIR}"
+  ok "Temp dir   : ${TEMP_DIR}"
 }
 
 build_ssl_fullchain() {
@@ -349,20 +384,6 @@ write_nginx_conf() {
   ok "Nginx config written to ${target}"
 }
 
-telegram_login() {
-  step "Telegram login (one-time)"
-  echo -e "${YELLOW}A verification code will be sent to your Telegram account.${NC}"
-  echo -e "${YELLOW}Setup will write the resulting session into .env automatically.${NC}\n"
-
-  ( cd "${INSTALL_DIR}" && node setup.js )
-
-  if ! grep -q "^SESSION=." "${INSTALL_DIR}/.env"; then
-    err "SESSION was not saved. Run 'cd ${INSTALL_DIR} && node setup.js' to retry."
-    exit 1
-  fi
-  ok "Session saved"
-}
-
 start_pm2() {
   step "Starting backend with PM2"
   ( cd "${INSTALL_DIR}" && pm2 start ecosystem.config.cjs )
@@ -376,10 +397,11 @@ print_done() {
   echo -e "${GREEN}${BOLD}========================================${NC}"
   echo -e "${GREEN}${BOLD}     tg-filehost is ready!              ${NC}"
   echo -e "${GREEN}${BOLD}========================================${NC}"
-  echo -e "  Files URL  : https://${HOST}/files/"
-  echo -e "  Health     : https://${HOST}/health"
-  echo -e "  Upload dir : ${UPLOAD_DIR}"
-  echo -e "  Install dir: ${INSTALL_DIR}"
+  echo -e "  Files URL   : https://${HOST}/files/"
+  echo -e "  Health      : https://${HOST}/health"
+  echo -e "  Upload dir  : ${UPLOAD_DIR}"
+  echo -e "  Temp dir    : ${TEMP_DIR}"
+  echo -e "  Install dir : ${INSTALL_DIR}"
   echo
   echo -e "  Useful commands:"
   echo -e "    pm2 status"
@@ -388,8 +410,9 @@ print_done() {
   echo -e "    bash ${INSTALL_DIR}/update.sh"
   echo -e "    bash ${INSTALL_DIR}/uninstall.sh"
   echo
-  echo -e "  Send any file to your bot account in Telegram and you'll get back"
-  echo -e "  a direct download link. See README.md for the full command list."
+  echo -e "  Open the bot in Telegram and:"
+  echo -e "    - send a file        → you'll get back a direct download link"
+  echo -e "    - send a direct URL  → you'll get back the file as a Telegram document"
   echo
 }
 
@@ -403,10 +426,9 @@ main() {
   confirm_inputs
   write_env
   install_npm_deps
-  prepare_upload_dir
+  prepare_runtime_dirs
   build_ssl_fullchain
   write_nginx_conf
-  telegram_login
   start_pm2
   print_done
 }

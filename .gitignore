@@ -1,7 +1,12 @@
 node_modules/
 .env
-*.session
-uploads/
+.env.*
+!.env.example
 logs/
 *.log
+*.bak.*
 package-lock.json
+
+# Persisted MTProto session — contains an auth key, never commit.
+telegram.session
+*.session
