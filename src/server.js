@@ -1,34 +1,50 @@
+/**
+ * Minimal Express server. The bot itself talks MTProto directly to Telegram
+ * (no webhook), so this server only exposes /health for nginx upstream
+ * checks. Static file downloads are served by nginx straight from disk and
+ * never hit Node.
+ */
+
 "use strict";
 
 const express = require("express");
-const cfg = require("./config");
+const config = require("./config");
 const logger = require("./logger");
 
-function buildApp() {
+function build() {
   const app = express();
-  app.disable("x-powered-by");
 
-  app.get("/health", (req, res) => {
-    res.json({ status: "ok", uptime: process.uptime() });
+  app.get("/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      environment: config.nodeEnv,
+    });
   });
 
-  // 404 for everything else. File serving is handled by nginx via the
-  // /files/ alias on the upload directory; the app does not serve files.
-  app.use((req, res) => {
-    res.status(404).json({ error: "Not found" });
+  app.use((_req, res) => {
+    res.status(404).json({ error: "Not Found" });
+  });
+
+  app.use((err, _req, res, _next) => {
+    logger.error("Express error", { error: err.message });
+    res.status(500).json({ error: "Internal Server Error" });
   });
 
   return app;
 }
 
-function startServer() {
-  const app = buildApp();
-  return new Promise((resolve) => {
-    const server = app.listen(cfg.port, "127.0.0.1", () => {
-      logger.info(`HTTP server listening on 127.0.0.1:${cfg.port}`);
-      resolve(server);
+function listen(app) {
+  return new Promise((resolve, reject) => {
+    const srv = app.listen(config.serverPort, config.serverHost, () => {
+      logger.info(
+        `HTTP server listening on ${config.serverHost}:${config.serverPort}`
+      );
+      resolve(srv);
     });
+    srv.once("error", reject);
   });
 }
 
-module.exports = { buildApp, startServer };
+module.exports = { build, listen };

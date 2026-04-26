@@ -1,21 +1,17 @@
 {
   "name": "tg-filehost",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "Telegram userbot that stores files on your server and returns direct CDN-style links",
+  "description": "Telegram bot that hosts any file you send it as a direct download link, and turns any direct URL you send it back into a Telegram file.",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "setup": "node setup.js",
     "dev": "nodemon src/index.js"
   },
   "dependencies": {
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "fs-extra": "^11.2.0",
-    "input": "^1.0.1",
-    "telegram": "^2.19.7",
-    "uuid": "^9.0.0"
+    "telegram": "^2.19.7"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
