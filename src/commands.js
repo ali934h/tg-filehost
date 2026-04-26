@@ -251,12 +251,16 @@ async function handleMessage(event) {
   if (text.startsWith("/del_")) return handleDelete(msg, text);
   if (text === "/deleteall") return handleDeleteAll(msg);
   if (isDownloadableMedia(msg.media)) return handleUpload(msg);
-  if (msg.media) {
-    await sendReply(
-      msg,
-      "❌ Please send an actual file. Links, polls, and plain text messages can't be hosted."
-    );
-  }
+
+  // Anything else from an allowed user (plain text, links without preview,
+  // unknown commands, polls, contacts, …) gets a helpful hint instead of
+  // silence, so the user always knows the bot is listening.
+  await sendReply(
+    msg,
+    "❌ Please send an actual file (document, photo, video, audio).\n" +
+      "Plain text, links, polls and contacts can't be hosted.\n\n" +
+      "Send /help to see the available commands."
+  );
 }
 
 module.exports = { handleMessage };
