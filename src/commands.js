@@ -251,6 +251,12 @@ async function handleMessage(event) {
   if (text.startsWith("/del_")) return handleDelete(msg, text);
   if (text === "/deleteall") return handleDeleteAll(msg);
   if (isDownloadableMedia(msg.media)) return handleUpload(msg);
+  if (msg.media) {
+    await sendReply(
+      msg,
+      "❌ Please send an actual file. Links, polls, and plain text messages can't be hosted."
+    );
+  }
 }
 
 module.exports = { handleMessage };
