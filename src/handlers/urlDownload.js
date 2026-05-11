@@ -20,11 +20,31 @@ const logger = require("../logger");
 const fileManager = require("../fileManager");
 const { escapeHtml } = require("../htmlEscape");
 
-const URL_REGEX = /^https?:\/\/\S+$/i;
+// Accept anything that starts with http(s):// followed by at least one
+// non-whitespace character. We allow internal whitespace (spaces in paths
+// like "Graphic Card" are common on CDN buckets and browsers tolerate them
+// by percent-encoding), but reject multi-line text — that cannot be a
+// single URL.
+const URL_REGEX = /^https?:\/\/\S/i;
 
 function looksLikeUrl(text) {
   if (!text) return false;
-  return URL_REGEX.test(text.trim());
+  const trimmed = text.trim();
+  if (!URL_REGEX.test(trimmed)) return false;
+  if (/[\r\n]/.test(trimmed)) return false;
+  return true;
+}
+
+// Normalize a user-supplied URL into a strictly RFC-compliant form by
+// running it through the WHATWG URL parser. This percent-encodes spaces and
+// other unsafe characters in the path while leaving the query string
+// (signatures, tokens, ...) untouched.
+function normalizeUrl(text) {
+  try {
+    return new URL(text.trim()).href;
+  } catch (_e) {
+    return null;
+  }
 }
 
 function isHtmlContentType(type) {
@@ -109,7 +129,12 @@ async function handle(ctx) {
     return;
   }
 
-  const urlString = text;
+  const urlString = normalizeUrl(text);
+  if (!urlString) {
+    await ctx.reply("❌ That doesn't look like a valid URL.");
+    return;
+  }
+
   const status = await ctx.reply("🔎 Checking URL...");
 
   // ---- HEAD probe -----------------------------------------------------
@@ -253,4 +278,4 @@ async function handle(ctx) {
   }
 }
 
-module.exports = { handle, looksLikeUrl };
+module.exports = { handle, looksLikeUrl, normalizeUrl };
